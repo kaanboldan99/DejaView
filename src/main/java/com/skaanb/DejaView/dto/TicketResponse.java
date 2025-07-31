@@ -1,11 +1,15 @@
 package com.skaanb.DejaView.dto;
 
+import com.skaanb.DejaView.model.Ticket;
+
 import java.time.LocalDateTime;
 import java.util.List;
 
 public class TicketResponse {
 
-    private Long id;
+
+    private Long ticketId;       // Veritabanındaki ID
+    private String elasticId;    // Elasticsearch’teki ID
     private String title;
     private String description;
     private String summary;
@@ -16,26 +20,20 @@ public class TicketResponse {
 
     public TicketResponse() {}
 
-    public TicketResponse(Long id, String title, String description, String summary,
-                          List<String> tags, LocalDateTime createdAt, Long userId, String username) {
-        this.id = id;
-        this.title = title;
-        this.description = description;
-        this.summary = summary;
-        this.tags = tags;
-        this.createdAt = createdAt;
-        this.userId = userId;
-        this.username = username;
+    public Long getTicketId() {
+        return ticketId;
     }
 
-    // Getters & Setters
-
-    public Long getId() {
-        return id;
+    public void setTicketId(Long ticketId) {
+        this.ticketId = ticketId;
     }
 
-    public void setId(Long id) {
-        this.id = id;
+    public String getElasticId() {
+        return elasticId;
+    }
+
+    public void setElasticId(String elasticId) {
+        this.elasticId = elasticId;
     }
 
     public String getTitle() {
@@ -93,4 +91,18 @@ public class TicketResponse {
     public void setUsername(String username) {
         this.username = username;
     }
+
+    public static TicketResponse fromTicket(Ticket ticket) {
+        TicketResponse response = new TicketResponse();
+        response.setTicketId(ticket.getId());                         // Veritabanı ID
+        response.setTitle(ticket.getTitle());
+        response.setSummary(ticket.getSummary());
+        response.setDescription(ticket.getDescription());
+        response.setTags(ticket.getTags());                           // Tags varsa eklemeyi unutma
+        response.setCreatedAt(ticket.getCreatedAt());
+        response.setUserId(ticket.getUser().getId());
+        response.setUsername(ticket.getUser().getUsername());
+        return response;
+    }
+
 }

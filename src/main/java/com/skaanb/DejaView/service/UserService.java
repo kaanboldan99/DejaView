@@ -2,6 +2,8 @@ package com.skaanb.DejaView.service;
 
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Optional;
@@ -11,9 +13,12 @@ import java.util.List;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
 
-    public UserService(UserRepository userRepository) {
+    @Autowired
+    public UserService(UserRepository userRepository, PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
     }
 
     // Kullanıcı oluştur
@@ -25,31 +30,30 @@ public class UserService {
             throw new RuntimeException("Email already registered");
         }
 
-        // Burada parola hashleme işlemi yapılabilir (örn. BCrypt)
+        // Şifreyi hashle
+        String hashedPassword = passwordEncoder.encode(user.getPassword());
+        user.setPassword(hashedPassword);
+
         return userRepository.save(user);
     }
 
-    // ID ile kullanıcı getir
+    // Diğer metotlar aynı kalabilir
     public Optional<User> getUserById(Long id) {
         return userRepository.findById(id);
     }
 
-    // Tüm kullanıcıları getir
     public List<User> getAllUsers() {
         return userRepository.findAll();
     }
 
-    // Kullanıcı adı ile ara
     public Optional<User> getByUsername(String username) {
         return userRepository.findByUsername(username);
     }
 
-    // Email ile ara
     public Optional<User> getByEmail(String email) {
         return userRepository.findByEmail(email);
     }
 
-    // Sil
     public void deleteUser(Long id) {
         userRepository.deleteById(id);
     }
