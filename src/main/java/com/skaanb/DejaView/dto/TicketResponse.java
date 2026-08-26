@@ -1,108 +1,43 @@
 package com.skaanb.DejaView.dto;
 
-import com.skaanb.DejaView.model.Ticket;
+import com.skaanb.DejaView.model.TicketDocument;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
 public class TicketResponse {
 
+    private String id; // Elasticsearch döküman ID'si String tipindedir
+    private String errorMessage;
+    private String stackTrace;
+    private String serviceName;
+    private String aiGeneratedDescription;
+    private List<String> aiTags;
+    private String solution;
+    private Instant createdAt; // Model sınıfınızdaki Instant tipiyle eşitlendi
+    private String createdBy;
 
-    private Long ticketId;       // Veritabanındaki ID
-    private String elasticId;    // Elasticsearch’teki ID
-    private String title;
-    private String description;
-    private String summary;
-    private List<String> tags;
-    private LocalDateTime createdAt;
-    private Long userId;
-    private String username;
-
-    public TicketResponse() {}
-
-    public Long getTicketId() {
-        return ticketId;
-    }
-
-    public void setTicketId(Long ticketId) {
-        this.ticketId = ticketId;
-    }
-
-    public String getElasticId() {
-        return elasticId;
-    }
-
-    public void setElasticId(String elasticId) {
-        this.elasticId = elasticId;
-    }
-
-    public String getTitle() {
-        return title;
-    }
-
-    public void setTitle(String title) {
-        this.title = title;
-    }
-
-    public String getDescription() {
-        return description;
-    }
-
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public String getSummary() {
-        return summary;
-    }
-
-    public void setSummary(String summary) {
-        this.summary = summary;
-    }
-
-    public List<String> getTags() {
-        return tags;
-    }
-
-    public void setTags(List<String> tags) {
-        this.tags = tags;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public Long getUserId() {
-        return userId;
-    }
-
-    public void setUserId(Long userId) {
-        this.userId = userId;
-    }
-
-    public String getUsername() {
-        return username;
-    }
-
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    public static TicketResponse fromTicket(Ticket ticket) {
+    // Elasticsearch Document nesnesinden DTO üreten static metot
+    public static TicketResponse fromTicket(TicketDocument ticketDocument) {
+        if (ticketDocument == null) {
+            return null;
+        }
         TicketResponse response = new TicketResponse();
-        response.setTicketId(ticket.getId());                         // Veritabanı ID
-        response.setTitle(ticket.getTitle());
-        response.setSummary(ticket.getSummary());
-        response.setDescription(ticket.getDescription());
-        response.setTags(ticket.getTags());                           // Tags varsa eklemeyi unutma
-        response.setCreatedAt(ticket.getCreatedAt());
-        response.setUserId(ticket.getUser().getId());
-        response.setUsername(ticket.getUser().getUsername());
+        response.setId(ticketDocument.getId());
+        response.setErrorMessage(ticketDocument.getErrorMessage());
+        response.setStackTrace(ticketDocument.getStackTrace());
+        response.setServiceName(ticketDocument.getServiceName());
+        response.setAiGeneratedDescription(ticketDocument.getAiGeneratedDescription());
+        response.setAiTags(ticketDocument.getAiTags());
+        response.setSolution(ticketDocument.getSolution());
+        response.setCreatedAt(ticketDocument.getCreatedAt());
+        response.setCreatedBy(ticketDocument.getCreatedBy());
         return response;
     }
-
 }

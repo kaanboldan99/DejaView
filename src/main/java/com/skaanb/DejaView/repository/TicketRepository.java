@@ -1,20 +1,16 @@
 package com.skaanb.DejaView.repository;
 
-import com.skaanb.DejaView.model.Ticket;
-import org.springframework.data.jpa.repository.JpaRepository;
+import com.skaanb.DejaView.model.TicketDocument;
+import org.springframework.data.elasticsearch.repository.ElasticsearchRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
 
 @Repository
-public interface TicketRepository extends JpaRepository<Ticket, Long> {
+public interface TicketRepository extends ElasticsearchRepository<TicketDocument, String> {
 
-    // Belirli bir kullanıcıya ait ticket'ları getir
-    List<Ticket> findByUserId(Long userId);
+    // Belirli bir kullanıcının oluşturduğu ticket'ları getir
+    List<TicketDocument> findByCreatedBy(String createdBy);
 
-    // Başlığa göre arama (case-insensitive)
-    List<Ticket> findByTitleContainingIgnoreCase(String title);
-
-    // Belirli bir etiketi içeren ticket'lar
-    List<Ticket> findByTagsContaining(String tag);
+    List<TicketDocument> findByAiTagsContaining(String tag);
 }
