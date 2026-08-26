@@ -1,17 +1,18 @@
 package com.skaanb.DejaView.config;
 
+import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.json.jackson.JacksonJsonpMapper;
+import co.elastic.clients.transport.ElasticsearchTransport;
+import co.elastic.clients.transport.rest_client.RestClientTransport;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.UsernamePasswordCredentials;
-import org.apache.http.client.CredentialsProvider;
 import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.elasticsearch.client.RestClient;
-import org.elasticsearch.client.RestClientBuilder;
-import org.elasticsearch.client.RestHighLevelClient;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
+import org.springframework.data.elasticsearch.client.elc.ElasticsearchTemplate;
 import org.springframework.data.elasticsearch.core.convert.ElasticsearchConverter;
 import org.springframework.data.elasticsearch.core.convert.MappingElasticsearchConverter;
 import org.springframework.data.elasticsearch.core.mapping.SimpleElasticsearchMappingContext;
@@ -28,28 +29,41 @@ public class ElasticsearchConfig {
     @Value("${spring.elasticsearch.rest.password}")
     private String esPassword;
 
-    // Tek HLL client bean’imizi tanımlıyoruz
+    // 1. Düşük seviyeli RestClient bileşenini kuruyoruz
     @Bean
-    public RestHighLevelClient elasticsearchClient() {
-        var creds = new BasicCredentialsProvider();
-        creds.setCredentials(AuthScope.ANY,
-                new UsernamePasswordCredentials(esUsername, esPassword));
+    public RestClient restClient() {
+        var credentialsProvider = new BasicCredentialsProvider();
+        if (esUsername != null && !esUsername.isBlank()) {
+            credentialsProvider.setCredentials(
+                    AuthScope.ANY,
+                    new UsernamePasswordCredentials(esUsername, esPassword)
+            );
+        }
 
-        HttpHost host = HttpHost.create(esUris);
-        RestClientBuilder builder = RestClient.builder(host)
-                .setHttpClientConfigCallback(http ->
-                        http.setDefaultCredentialsProvider(creds)
-                );
-        return new RestHighLevelClient(builder);
+        return RestClient.builder(HttpHost.create(esUris))
+                .setHttpClientConfigCallback(httpClientBuilder ->
+                        httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider)
+                )
+                .build();
     }
 
-    // Burada hem client’i hem converter’ı alıyoruz
+    // 2. Spring Boot 3.x uyumlu modern ElasticsearchClient Bean tanımı
     @Bean
-    public ElasticsearchRestTemplate elasticsearchRestTemplate(
-            RestHighLevelClient client,
+    public ElasticsearchClient elasticsearchClient(RestClient restClient) {
+        ElasticsearchTransport transport = new RestClientTransport(
+                restClient,
+                new JacksonJsonpMapper()
+        );
+        return new ElasticsearchClient(transport);
+    }
+
+    // 3. Eski ElasticsearchRestTemplate yerine modern ElasticsearchTemplate tanımı
+    @Bean
+    public ElasticsearchTemplate elasticsearchTemplate(
+            ElasticsearchClient client,
             ElasticsearchConverter converter
     ) {
-        return new ElasticsearchRestTemplate(client, converter);
+        return new ElasticsearchTemplate(client, converter);
     }
 
     @Bean

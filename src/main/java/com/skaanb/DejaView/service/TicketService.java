@@ -1,106 +1,104 @@
 package com.skaanb.DejaView.service;
 
-import com.skaanb.DejaView.dto.TicketDocumentResponse;
 import com.skaanb.DejaView.dto.CreateTicketRequest;
 import com.skaanb.DejaView.dto.TicketResponse;
-import com.skaanb.DejaView.model.Ticket;
 import com.skaanb.DejaView.model.TicketDocument;
-import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.TicketRepository;
-import com.skaanb.DejaView.repository.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.stereotype.Service;
-import org.springframework.data.elasticsearch.core.ElasticsearchRestTemplate;
-import org.springframework.data.elasticsearch.core.SearchHits;
-import org.springframework.data.elasticsearch.core.query.NativeSearchQueryBuilder;
-import org.springframework.data.elasticsearch.core.query.Query;
 
-
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
-
-import static org.elasticsearch.index.query.QueryBuilders.multiMatchQuery;
+import java.util.stream.StreamSupport;
 
 @Service
 public class TicketService {
 
     private final TicketRepository ticketRepository;
-    private final UserRepository userRepository;
-    private final ElasticsearchRestTemplate elasticsearchTemplate;
-    private final OpenAiService openAiService;
 
     @Autowired
-    public TicketService(
-            TicketRepository ticketRepository,
-            UserRepository userRepository,
-            ElasticsearchRestTemplate elasticsearchTemplate,
-            OpenAiService openAiService
-    ) {
+    public TicketService(TicketRepository ticketRepository) {
         this.ticketRepository = ticketRepository;
-        this.userRepository = userRepository;
-        this.elasticsearchTemplate = elasticsearchTemplate;
-        this.openAiService = openAiService;
     }
 
+    // GlobalExceptionHandler için yapay zekasız kayıt metodu
+    public TicketDocument saveTicketLog(String errorMessage, String stackTrace, String serviceName) {
+        TicketDocument ticket = new TicketDocument();
+        ticket.setErrorMessage(errorMessage);
+        ticket.setStackTrace(stackTrace);
+        ticket.setServiceName(serviceName);
+        ticket.setCreatedAt(Instant.now());
+
+        ticket.setAiGeneratedDescription("AI analizi devre dışı bırakıldı.");
+        ticket.setAiTags(List.of("Log"));
+        ticket.setSolution("Lokal log kayıtları incelenmelidir.");
+        ticket.setCreatedBy("system");
+
+        return ticketRepository.save(ticket);
+    }
+
+    // Controller katmanından gelen manuel bilet oluşturma isteği
     public TicketResponse createTicket(CreateTicketRequest request, String username) {
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UsernameNotFoundException("Kullanıcı bulunamadı"));
+        TicketDocument ticket = new TicketDocument();
+        ticket.setErrorMessage(request.getDescription() != null ? request.getDescription() : "Manuel Kayıt");
+        ticket.setStackTrace("Kullanıcı tarafından manuel oluşturuldu. Oluşturan: " + username);
+        ticket.setServiceName("TicketController");
+        ticket.setCreatedAt(Instant.now());
 
-        Ticket ticket = new Ticket();
-        ticket.setTitle(request.getTitle());
-        ticket.setDescription(request.getDescription());
-        ticket.setUser(user);
+        ticket.setAiGeneratedDescription("Manuel bilet kaydı.");
+        ticket.setAiTags(request.getTags() != null ? request.getTags() : List.of("Manual"));
+        ticket.setSolution("Çözüm yolu henüz belirtilmedi.");
+        ticket.setCreatedBy(username);
 
-        String summary = openAiService.summarize(request.getDescription());
-        ticket.setSummary(summary);
-
-        Ticket saved = ticketRepository.save(ticket);
+        TicketDocument saved = ticketRepository.save(ticket);
         return TicketResponse.fromTicket(saved);
     }
 
-    public List<Ticket> getAllTickets() {
-        return ticketRepository.findAll();
-    }
-
-    public Optional<Ticket> getTicketById(Long id) {
+    public Optional<TicketDocument> getTicketById(String id) {
         return ticketRepository.findById(id);
     }
 
-    public List<Ticket> getTicketsByUserId(Long userId) {
-        return ticketRepository.findByUserId(userId);
+    public List<TicketDocument> getAllTickets() {
+        return StreamSupport.stream(ticketRepository.findAll().spliterator(), false)
+                .collect(Collectors.toList());
     }
 
-    public void deleteTicket(Long id, String username) {
-        Ticket ticket = ticketRepository.findById(id)
+    public void deleteTicket(String id, String username) {
+        TicketDocument ticket = ticketRepository.findById(id)
                 .orElseThrow(() -> new RuntimeException("Ticket bulunamadı"));
 
-        if (!ticket.getUser().getUsername().equals(username)) {
-            throw new RuntimeException("Bu ticket'ı silmeye yetkiniz yok.");
+        if (!username.equals(ticket.getCreatedBy())) {
+            throw new RuntimeException("Bu ticket'ı silme yetkiniz yok");
         }
 
-        ticketRepository.delete(ticket);
+        ticketRepository.deleteById(id);
     }
 
-
-    public List<Ticket> searchByTitle(String keyword) {
-        return ticketRepository.findByTitleContainingIgnoreCase(keyword);
-    }
-
-    public List<Ticket> searchByTag(String tag) {
-        return ticketRepository.findByTagsContaining(tag);
-    }
-
+    // query parametresine göre errorMessage, serviceName ve aiTags alanlarında
+    // büyük/küçük harf duyarsız arama yapar
     public List<TicketResponse> searchTickets(String query) {
-        Query searchQuery = new NativeSearchQueryBuilder()
-                .withQuery(multiMatchQuery(query, "title", "summary", "description"))
-                .build();
+        if (query == null || query.isBlank()) {
+            return StreamSupport.stream(ticketRepository.findAll().spliterator(), false)
+                    .map(TicketResponse::fromTicket)
+                    .collect(Collectors.toList());
+        }
 
-        SearchHits<TicketDocument> hits = elasticsearchTemplate.search(searchQuery, TicketDocument.class);
+        String lowerQuery = query.toLowerCase();
 
-        return hits.stream()
-                .map(hit -> TicketDocumentResponse.fromDocument(hit.getContent()))
+        return StreamSupport.stream(ticketRepository.findAll().spliterator(), false)
+                .filter(ticket ->
+                        containsIgnoreCase(ticket.getErrorMessage(), lowerQuery)
+                                || containsIgnoreCase(ticket.getServiceName(), lowerQuery)
+                                || (ticket.getAiTags() != null && ticket.getAiTags().stream()
+                                .anyMatch(tag -> containsIgnoreCase(tag, lowerQuery)))
+                )
+                .map(TicketResponse::fromTicket)
                 .collect(Collectors.toList());
+    }
+
+    private boolean containsIgnoreCase(String source, String lowerQuery) {
+        return source != null && source.toLowerCase().contains(lowerQuery);
     }
 }
