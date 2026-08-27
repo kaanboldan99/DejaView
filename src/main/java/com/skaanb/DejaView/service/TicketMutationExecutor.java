@@ -5,6 +5,7 @@ import com.skaanb.DejaView.repository.TicketRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.OptimisticLockingFailureException;
+import org.springframework.data.elasticsearch.VersionConflictException;
 import org.springframework.stereotype.Component;
 
 import java.util.function.Consumer;
@@ -14,8 +15,14 @@ import java.util.function.Consumer;
 // fazla thread ile çalıştığında (bkz. application.properties: listener.simple.concurrency)
 // veya bir kullanıcı ticket oluştururken aynı anda başka bir occurrence/AI sonucu aynı
 // dokümana yazmaya çalışırsa, TicketDocument@Version sayesinde eski versiyonla yapılan
-// save() OptimisticLockingFailureException fırlatır; bu sınıf böyle bir çakışmada
-// dokümanı yeniden okuyup mutator'ı tekrar uygulayarak "lost update" oluşmasını engeller.
+// save() çakışma fırlatır; bu sınıf böyle bir çakışmada dokümanı yeniden okuyup
+// mutator'ı tekrar uygulayarak "lost update" oluşmasını engeller.
+//
+// ÖNEMLİ: Spring Data Elasticsearch'ün @Version desteği (external versioning) JPA'nın
+// aksine version'ı otomatik ARTIRMAZ — save() her zaman entity üzerindeki mevcut version
+// değerini "bu değere eşit veya büyükse reddet" olarak gönderir. Bu yüzden her kayıttan
+// önce version'ı burada elle artırıyoruz; aksi halde ikinci save() her zaman
+// VersionConflictException ile başarısız olur (version, okunanla aynı kalır).
 @Component
 public class TicketMutationExecutor {
 
@@ -30,8 +37,8 @@ public class TicketMutationExecutor {
 
     /**
      * id'si verilen ticket'ı okur, mutator ile değiştirir ve kaydeder. Concurrent bir
-     * güncelleme çakışması olursa (OptimisticLockingFailureException) dokümanı en güncel
-     * haliyle yeniden okuyup mutator'ı tekrar uygular.
+     * güncelleme çakışması olursa (VersionConflictException / OptimisticLockingFailureException)
+     * dokümanı en güncel haliyle yeniden okuyup mutator'ı tekrar uygular.
      *
      * @throws IllegalArgumentException ticket bulunamazsa
      * @throws IllegalStateException MAX_ATTEMPTS denemede de çakışma çözülemezse
@@ -43,9 +50,15 @@ public class TicketMutationExecutor {
 
             mutator.accept(ticket);
 
+            // external versioning: ES sadece verilen version, mevcut saklanan versiyondan
+            // KESİN OLARAK büyükse yazmayı kabul ediyor. findById ile okunan versiyon
+            // mevcut saklanan değerin ta kendisi olduğu için elle artırmak şart.
+            Long currentVersion = ticket.getVersion();
+            ticket.setVersion(currentVersion == null ? 1L : currentVersion + 1);
+
             try {
                 return ticketRepository.save(ticket);
-            } catch (OptimisticLockingFailureException e) {
+            } catch (VersionConflictException | OptimisticLockingFailureException e) {
                 logger.warn("Ticket üzerinde concurrent güncelleme çakışması, tekrar deneniyor ({}/{}). ticketId={}",
                         attempt, MAX_ATTEMPTS, ticketId);
             }
