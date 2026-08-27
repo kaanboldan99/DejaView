@@ -1,5 +1,6 @@
 package com.skaanb.DejaView.config;
 
+import com.skaanb.DejaView.model.Role;
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.UserRepository;
 import org.slf4j.Logger;
@@ -32,6 +33,7 @@ public class DataInitializer implements CommandLineRunner {
             User adminUser = new User();
             adminUser.setUsername(adminUsername);
             adminUser.setEmail(adminEmail);
+            adminUser.setRole(Role.ADMIN);
 
             // Güvenlik kurallarınız gereği şifreyi BCryptPasswordEncoder ile hashliyoruz
             adminUser.setPassword(passwordEncoder.encode(adminRawPassword));

@@ -21,6 +21,15 @@ public class User {
     @Column(nullable = false, unique = true)
     private String email;
 
+    // Telefon üzerinden ticket açma akışı için (kullanıcı adı + telefon eşleşmesi).
+    // Telefon/IVR entegrasyonunun kendisi henüz kurulmadı, bu sadece altyapı hazırlığı.
+    @Column(unique = true)
+    private String phoneNumber;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
+    private Role role = Role.USER;
+
     private LocalDateTime createdAt = LocalDateTime.now();
 
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
@@ -67,6 +76,22 @@ public class User {
 
     public void setEmail(String email) {
         this.email = email;
+    }
+
+    public String getPhoneNumber() {
+        return phoneNumber;
+    }
+
+    public void setPhoneNumber(String phoneNumber) {
+        this.phoneNumber = phoneNumber;
+    }
+
+    public Role getRole() {
+        return role;
+    }
+
+    public void setRole(Role role) {
+        this.role = role;
     }
 
     public LocalDateTime getCreatedAt() {

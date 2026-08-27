@@ -1,5 +1,7 @@
 package com.skaanb.DejaView.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -9,6 +11,8 @@ import java.util.*;
 
 @Service
 public class OpenAiService {
+
+    private static final Logger logger = LoggerFactory.getLogger(OpenAiService.class);
 
     private final RestTemplate restTemplate;
     private final String apiKey;
@@ -44,6 +48,7 @@ public class OpenAiService {
             Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
             return (String) message.get("content");
         } catch (Exception e) {
+            logger.error("OpenAI API çağrısı başarısız oldu: {}", e.getMessage(), e);
             return "OpenAI özeti alınamadı.";
         }
     }

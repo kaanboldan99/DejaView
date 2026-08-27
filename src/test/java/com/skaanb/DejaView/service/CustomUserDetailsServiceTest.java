@@ -58,6 +58,23 @@ public class CustomUserDetailsServiceTest {
     }
 
     @Test
+    void testLoadUserByUsername_AdminRole_GrantsAdminAuthority() {
+        // Given
+        mockDbUser.setRole(com.skaanb.DejaView.model.Role.ADMIN);
+        Mockito.when(userRepository.findByUsername("kaanboldan"))
+                .thenReturn(Optional.of(mockDbUser));
+
+        // When
+        UserDetails userDetails = customUserDetailsService.loadUserByUsername("kaanboldan");
+
+        // Then
+        assertTrue(userDetails.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_ADMIN")));
+        assertFalse(userDetails.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("ROLE_USER")));
+    }
+
+    @Test
     void testLoadUserByUsername_ThrowsException_WhenUserNotFound() {
         // Given
         String unknownUser = "bilinmeyen_kullanici";

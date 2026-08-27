@@ -1,5 +1,7 @@
 package com.skaanb.DejaView.service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -8,6 +10,12 @@ import java.util.List;
 
 @Service
 public class GeminiService {
+
+    private static final Logger logger = LoggerFactory.getLogger(GeminiService.class);
+
+    // Çağıranların (ör. TicketAnalysisListener) başarı/başarısızlığı ayırt edebilmesi için;
+    // summarize() hiçbir zaman exception fırlatmaz, hata durumunda bu sabiti döner.
+    public static final String SUMMARY_FAILED_MESSAGE = "Gemini ile özet oluşturulamadı.";
 
     @Value("${gemini.api.key}")
     private String apiKey;
@@ -40,8 +48,8 @@ public class GeminiService {
             return firstPart.get("text").toString().trim();
 
         } catch (Exception e) {
-            // Loglama yapabilir veya hata durumunda fallback dönebilirsin
-            return "Gemini ile özet oluşturulamadı.";
+            logger.error("Gemini API çağrısı başarısız oldu: {}", e.getMessage(), e);
+            return SUMMARY_FAILED_MESSAGE;
         }
     }
 }

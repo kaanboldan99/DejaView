@@ -1,6 +1,7 @@
 package com.skaanb.DejaView.exception;
 
 import com.skaanb.DejaView.model.TicketDocument;
+import com.skaanb.DejaView.model.TicketStatus;
 import com.skaanb.DejaView.repository.TicketRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -38,15 +39,21 @@ public class GlobalExceptionHandler {
 
         try {
             TicketDocument ticket = new TicketDocument();
+            String title = ex.getClass().getSimpleName() + ": " + request.getRequestURI();
+            ticket.setTitle(title);
+            ticket.setTitleNormalized(title.toLowerCase());
             ticket.setErrorMessage(ex.getMessage());
             ticket.setStackTrace(stackTraceStr);
             ticket.setServiceName("DejaView-Backend");
 
             ticket.setCreatedAt(Instant.now());
+            ticket.setLastOccurrenceAt(Instant.now());
 
             ticket.setAiGeneratedDescription("AI Analizi Devre Dışı");
             ticket.setAiTags(java.util.List.of("SystemError"));
-            ticket.setSolution("Çözüm adımları henüz eklenmedi.");
+            ticket.getSolutions().add("Çözüm adımları henüz eklenmedi.");
+            ticket.setCreatedBy("system");
+            ticket.setStatus(TicketStatus.COMPLETED);
 
             // HATA 2 ÇÖZÜMÜ: Repository'nin kabul ettiği doğru nesne gönderildi
             ticketRepository.save(ticket);

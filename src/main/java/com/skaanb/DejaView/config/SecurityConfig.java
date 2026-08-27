@@ -70,7 +70,12 @@ public class SecurityConfig {
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .userDetailsService(customUserDetailsService)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/api/auth/**").permitAll()
+                        .requestMatchers("/api/auth/login").permitAll()
+                        // Kullanıcı kaydı artık herkese açık değil; sadece ADMIN
+                        // yeni kullanıcı ekleyebilir.
+                        .requestMatchers("/api/auth/register").hasRole("ADMIN")
+                        // AI'a yeniden özetletme, sadece ADMIN yetkisiyle tetiklenebilir.
+                        .requestMatchers("/api/tickets/*/resummarize").hasRole("ADMIN")
                         .requestMatchers(
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",

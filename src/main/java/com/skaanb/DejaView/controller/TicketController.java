@@ -6,6 +6,8 @@ import com.skaanb.DejaView.model.TicketDocument;
 import com.skaanb.DejaView.service.TicketService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
@@ -48,12 +50,22 @@ public class TicketController {
     }
 
     // Ticket Sil (ID veri tipi Long yerine String olarak güncellendi)
+    // ADMIN rolündeki kullanıcılar sahiplik kontrolüne takılmadan her ticket'ı silebilir.
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> deleteTicket(@PathVariable String id, Principal principal) {
-        String username = (principal != null) ? principal.getName() : "anonymous_user";
+    public ResponseEntity<Void> deleteTicket(@PathVariable String id, Authentication authentication) {
+        String username = (authentication != null) ? authentication.getName() : "anonymous_user";
+        boolean isAdmin = authentication != null && authentication.getAuthorities().stream()
+                .map(GrantedAuthority::getAuthority)
+                .anyMatch("ROLE_ADMIN"::equals);
 
-        ticketService.deleteTicket(id, username);
+        ticketService.deleteTicket(id, username, isAdmin);
         return ResponseEntity.noContent().build();
+    }
+
+    // Admin: mevcut bir ticket için AI analizini yeniden tetikler (SecurityConfig'de ADMIN'e kısıtlı).
+    @PostMapping("/{id}/resummarize")
+    public ResponseEntity<TicketResponse> resummarizeTicket(@PathVariable String id) {
+        return ResponseEntity.ok(ticketService.resummarizeTicket(id));
     }
 
     // Elasticsearch Arama
