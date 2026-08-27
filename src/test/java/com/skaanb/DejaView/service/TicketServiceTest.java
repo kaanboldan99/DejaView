@@ -19,12 +19,11 @@ import org.springframework.data.elasticsearch.core.query.Query;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 // TicketRepository Elasticsearch'e bağlandığı için burada mock'lanıyor;
@@ -42,11 +41,15 @@ public class TicketServiceTest {
     @Mock
     private TicketAnalysisProducer ticketAnalysisProducer;
 
+    @Mock
+    private TicketMutationExecutor ticketMutationExecutor;
+
     private TicketService ticketService;
 
     @BeforeEach
     void setUp() {
-        ticketService = new TicketService(ticketRepository, elasticsearchOperations, ticketAnalysisProducer);
+        ticketService = new TicketService(ticketRepository, elasticsearchOperations,
+                ticketAnalysisProducer, ticketMutationExecutor);
     }
 
     @Test
@@ -57,19 +60,15 @@ public class TicketServiceTest {
         request.setDescription("PostgreSQL sunucusuna bağlanılamadı, port 5432 refused.");
         request.setTags(List.of("db"));
 
-        when(ticketRepository.findByTitleNormalized("bağlantı hatası")).thenReturn(Optional.empty());
-        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(invocation -> {
-            TicketDocument saved = invocation.getArgument(0);
-            saved.setId("generated-id");
-            return saved;
-        });
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         // When
         TicketResponse response = ticketService.createTicket(request, "kaanboldan");
 
         // Then
         assertNotNull(response);
-        assertEquals("generated-id", response.getId());
+        assertNotNull(response.getId()); // başlıktan deterministik olarak türetilir
         assertEquals("Bağlantı Hatası", response.getTitle());
         assertEquals("PostgreSQL sunucusuna bağlanılamadı, port 5432 refused.", response.getErrorMessage());
         assertEquals(List.of("db"), response.getAiTags());
@@ -80,24 +79,58 @@ public class TicketServiceTest {
         ArgumentCaptor<TicketDocument> captor = ArgumentCaptor.forClass(TicketDocument.class);
         verify(ticketRepository).save(captor.capture());
         assertEquals("bağlantı hatası", captor.getValue().getTitleNormalized());
+        assertEquals(captor.getValue().getId(), response.getId());
 
+        // Duplicate-merge yolu (TicketMutationExecutor) hiç tetiklenmemeli
+        verifyNoInteractions(ticketMutationExecutor);
         // AI analizi kuyruğa gönderilmeli
-        verify(ticketAnalysisProducer).enqueueAnalysis(eq("generated-id"), anyString());
+        verify(ticketAnalysisProducer).enqueueAnalysis(eq(response.getId()), anyString());
     }
 
+    @Test
+    void testCreateTicket_SameTitleTwice_ProducesSameDeterministicId() {
+        // Given: aynı başlık iki kez oluşturulmaya çalışılsa (deterministik ID sayesinde)
+        // aynı ID'yi üretmeli — bu, iki farklı ticket'ın aynı başlıkla var olmasını
+        // yapısal olarak engelleyen mekanizma.
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        CreateTicketRequest request1 = new CreateTicketRequest();
+        request1.setTitle("Bağlantı Hatası");
+        request1.setDescription("İlk oluşum");
+
+        CreateTicketRequest request2 = new CreateTicketRequest();
+        request2.setTitle("bağlantı hatası "); // farklı case + boşluk
+        request2.setDescription("İkinci oluşum");
+
+        // When
+        String id1 = ticketService.createTicket(request1, "kullanici1").getId();
+        String id2 = ticketService.createTicket(request2, "kullanici2").getId();
+
+        // Then
+        assertEquals(id1, id2);
+    }
+
+    @SuppressWarnings("unchecked")
     @Test
     void testCreateTicket_DuplicateTitle_MergesTagsAndIncrementsOccurrence() {
         // Given: aynı başlıkla daha önce açılmış bir ticket var
         TicketDocument existing = new TicketDocument();
-        existing.setId("ticket-1");
+        existing.setId("existing-doc-id");
         existing.setTitle("Bağlantı Hatası");
         existing.setTitleNormalized("bağlantı hatası");
         existing.setAiTags(List.of("db"));
         existing.setOccurrenceCount(1);
         existing.setCreatedBy("ilkKullanici");
 
-        when(ticketRepository.findByTitleNormalized("bağlantı hatası")).thenReturn(Optional.of(existing));
-        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(ticketRepository.existsById(anyString())).thenReturn(true);
+        // TicketMutationExecutor mock'landığı için, service'in verdiği mutator'ı
+        // gerçek "existing" nesnesi üzerinde biz uyguluyoruz.
+        when(ticketMutationExecutor.mutate(anyString(), any(Consumer.class))).thenAnswer(invocation -> {
+            Consumer<TicketDocument> mutator = invocation.getArgument(1);
+            mutator.accept(existing);
+            return existing;
+        });
 
         CreateTicketRequest request = new CreateTicketRequest();
         request.setTitle("Bağlantı Hatası");
@@ -108,15 +141,15 @@ public class TicketServiceTest {
         TicketResponse response = ticketService.createTicket(request, "farkliKullanici");
 
         // Then: yeni bir ticket oluşturulmuyor, mevcut kayıt güncelleniyor
-        assertEquals("ticket-1", response.getId());
+        assertEquals("existing-doc-id", response.getId());
         assertEquals("Bağlantı Hatası", response.getTitle()); // başlık değişmedi
         assertEquals("ilkKullanici", response.getCreatedBy()); // orijinal sahibi değişmedi
         assertEquals(2, response.getOccurrenceCount()); // arttı
         assertEquals(List.of("db", "timeout"), response.getAiTags()); // birleşti
         assertEquals(TicketStatus.PENDING, response.getStatus());
 
-        verify(ticketRepository, times(1)).save(any(TicketDocument.class));
-        verify(ticketAnalysisProducer).enqueueAnalysis(eq("ticket-1"), anyString());
+        verify(ticketRepository, never()).save(any(TicketDocument.class));
+        verify(ticketAnalysisProducer).enqueueAnalysis(eq("existing-doc-id"), anyString());
     }
 
     @Test
@@ -177,6 +210,7 @@ public class TicketServiceTest {
         verify(ticketRepository, never()).deleteById(anyString());
     }
 
+    @SuppressWarnings("unchecked")
     @Test
     void testResummarizeTicket_EnqueuesAnalysis() {
         // Given
@@ -184,8 +218,12 @@ public class TicketServiceTest {
         existing.setId("ticket-1");
         existing.setErrorMessage("Orijinal hata mesajı");
         existing.setStatus(TicketStatus.COMPLETED);
-        when(ticketRepository.findById("ticket-1")).thenReturn(Optional.of(existing));
-        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        when(ticketMutationExecutor.mutate(eq("ticket-1"), any(Consumer.class))).thenAnswer(invocation -> {
+            Consumer<TicketDocument> mutator = invocation.getArgument(1);
+            mutator.accept(existing);
+            return existing;
+        });
 
         // When
         TicketResponse response = ticketService.resummarizeTicket("ticket-1");

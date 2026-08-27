@@ -1,6 +1,7 @@
 package com.skaanb.DejaView.model;
 
 import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Version;
 import org.springframework.data.elasticsearch.annotations.Document;
 import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
@@ -13,6 +14,13 @@ public class TicketDocument {
 
     @Id
     private String id;
+
+    // Elasticsearch'in optimistic concurrency control'ünü (seq_no/primary_term) kullanır.
+    // İki thread aynı ticket'ı aynı anda güncellemeye çalışırsa, versiyonu eski olan save()
+    // OptimisticLockingFailureException fırlatır (bkz. TicketMutationExecutor) — bu sayede
+    // biri diğerinin yazdığını sessizce ezmez (lost update önlenir).
+    @Version
+    private Long version;
 
     @Field(type = FieldType.Keyword)
     private String title;
@@ -62,6 +70,9 @@ public class TicketDocument {
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
+
+    public Long getVersion() { return version; }
+    public void setVersion(Long version) { this.version = version; }
 
     public String getTitle() { return title; }
     public void setTitle(String title) { this.title = title; }

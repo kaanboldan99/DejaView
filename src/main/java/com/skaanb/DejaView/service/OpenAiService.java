@@ -1,5 +1,6 @@
 package com.skaanb.DejaView.service;
 
+import com.skaanb.DejaView.exception.AiSummarizationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,8 +10,11 @@ import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
 
+// Şu an aktif sağlayıcı GeminiService (@Primary); bu sınıf AiSummarizationService'i
+// implemente ettiği için sağlayıcı değiştirmek istendiğinde (ör. @Primary'yi buraya taşımak
+// veya listener'da @Qualifier ile seçmek) TicketAnalysisListener'da hiçbir değişiklik gerekmez.
 @Service
-public class OpenAiService {
+public class OpenAiService implements AiSummarizationService {
 
     private static final Logger logger = LoggerFactory.getLogger(OpenAiService.class);
 
@@ -22,6 +26,8 @@ public class OpenAiService {
         this.apiKey = apiKey;
     }
 
+    @Override
+    @SuppressWarnings("unchecked")
     public String summarize(String text) {
         String url = "https://api.openai.com/v1/chat/completions";
 
@@ -49,7 +55,7 @@ public class OpenAiService {
             return (String) message.get("content");
         } catch (Exception e) {
             logger.error("OpenAI API çağrısı başarısız oldu: {}", e.getMessage(), e);
-            return "OpenAI özeti alınamadı.";
+            throw new AiSummarizationException("OpenAI özeti alınamadı.", e);
         }
     }
 }

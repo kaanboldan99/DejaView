@@ -1,20 +1,22 @@
 package com.skaanb.DejaView.service;
 
 import com.skaanb.DejaView.dto.TicketAnalysisMessage;
+import com.skaanb.DejaView.exception.AiSummarizationException;
 import com.skaanb.DejaView.model.TicketDocument;
 import com.skaanb.DejaView.model.TicketStatus;
 import com.skaanb.DejaView.repository.TicketRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.util.Optional;
+import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -24,58 +26,66 @@ class TicketAnalysisListenerTest {
     private TicketRepository ticketRepository;
 
     @Mock
-    private GeminiService geminiService;
+    private AiSummarizationService aiSummarizationService;
+
+    @Mock
+    private TicketMutationExecutor ticketMutationExecutor;
 
     private TicketAnalysisListener listener;
 
+    private TicketDocument ticketState;
+
     @BeforeEach
     void setUp() {
-        listener = new TicketAnalysisListener(ticketRepository, geminiService);
+        listener = new TicketAnalysisListener(ticketRepository, aiSummarizationService, ticketMutationExecutor);
+
+        ticketState = new TicketDocument();
+        ticketState.setId("ticket-1");
+
+        // TicketMutationExecutor.mutate mock'landığı için, gerçek repository/optimistic
+        // locking davranışını değil, listener'ın mutator olarak neyi uyguladığını
+        // doğruluyoruz: verilen Consumer'ı gerçek bir TicketDocument üzerinde çalıştırıyoruz.
+        lenient().when(ticketMutationExecutor.mutate(eq("ticket-1"), any())).thenAnswer(invocation -> {
+            Consumer<TicketDocument> mutator = invocation.getArgument(1);
+            mutator.accept(ticketState);
+            return ticketState;
+        });
     }
 
     @Test
     void testHandle_Success_AppendsSolutionAndMarksCompleted() {
         // Given
-        TicketDocument ticket = new TicketDocument();
-        ticket.setId("ticket-1");
-        ticket.getSolutions().add("Önceki çözüm");
-        when(ticketRepository.findById("ticket-1")).thenReturn(Optional.of(ticket));
-        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(geminiService.summarize("hata açıklaması")).thenReturn("Yeni AI çözümü");
+        ticketState.getSolutions().add("Önceki çözüm");
+        when(ticketRepository.findById("ticket-1")).thenReturn(Optional.of(ticketState));
+        when(aiSummarizationService.summarize("hata açıklaması")).thenReturn("Yeni AI çözümü");
 
         // When
         listener.handle(new TicketAnalysisMessage("ticket-1", "hata açıklaması"));
 
         // Then
-        ArgumentCaptor<TicketDocument> captor = ArgumentCaptor.forClass(TicketDocument.class);
-        verify(ticketRepository, times(2)).save(captor.capture()); // PROCESSING sonra COMPLETED
-
-        TicketDocument finalState = captor.getValue();
-        assertEquals(TicketStatus.COMPLETED, finalState.getStatus());
-        assertEquals("Yeni AI çözümü", finalState.getAiGeneratedDescription());
+        verify(ticketMutationExecutor, times(2)).mutate(eq("ticket-1"), any()); // PROCESSING sonra COMPLETED
+        assertEquals(TicketStatus.COMPLETED, ticketState.getStatus());
+        assertEquals("Yeni AI çözümü", ticketState.getAiGeneratedDescription());
         // Eski çözüm silinmemeli, yenisi eklenmeli
-        assertEquals(2, finalState.getSolutions().size());
-        assertTrue(finalState.getSolutions().contains("Önceki çözüm"));
-        assertTrue(finalState.getSolutions().contains("Yeni AI çözümü"));
+        assertEquals(2, ticketState.getSolutions().size());
+        assertTrue(ticketState.getSolutions().contains("Önceki çözüm"));
+        assertTrue(ticketState.getSolutions().contains("Yeni AI çözümü"));
     }
 
     @Test
-    void testHandle_GeminiFailureMessage_MarksFailed() {
+    void testHandle_AiSummarizationException_MarksFailed() {
         // Given
-        TicketDocument ticket = new TicketDocument();
-        ticket.setId("ticket-1");
-        when(ticketRepository.findById("ticket-1")).thenReturn(Optional.of(ticket));
-        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(geminiService.summarize(any())).thenReturn(GeminiService.SUMMARY_FAILED_MESSAGE);
+        when(ticketRepository.findById("ticket-1")).thenReturn(Optional.of(ticketState));
+        when(aiSummarizationService.summarize(any()))
+                .thenThrow(new AiSummarizationException("Gemini ile özet oluşturulamadı.", new RuntimeException("timeout")));
 
         // When
         listener.handle(new TicketAnalysisMessage("ticket-1", "hata açıklaması"));
 
         // Then
-        ArgumentCaptor<TicketDocument> captor = ArgumentCaptor.forClass(TicketDocument.class);
-        verify(ticketRepository, times(2)).save(captor.capture());
-        assertEquals(TicketStatus.FAILED, captor.getValue().getStatus());
-        assertTrue(captor.getValue().getSolutions().isEmpty());
+        verify(ticketMutationExecutor, times(2)).mutate(eq("ticket-1"), any()); // PROCESSING sonra FAILED
+        assertEquals(TicketStatus.FAILED, ticketState.getStatus());
+        assertTrue(ticketState.getSolutions().isEmpty());
     }
 
     @Test
@@ -87,25 +97,7 @@ class TicketAnalysisListenerTest {
         listener.handle(new TicketAnalysisMessage("missing", "açıklama"));
 
         // Then
-        verify(ticketRepository, never()).save(any());
-        verifyNoInteractions(geminiService);
-    }
-
-    @Test
-    void testHandle_UnexpectedException_MarksFailed() {
-        // Given
-        TicketDocument ticket = new TicketDocument();
-        ticket.setId("ticket-1");
-        when(ticketRepository.findById("ticket-1")).thenReturn(Optional.of(ticket));
-        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(geminiService.summarize(any())).thenThrow(new RuntimeException("beklenmeyen hata"));
-
-        // When
-        listener.handle(new TicketAnalysisMessage("ticket-1", "açıklama"));
-
-        // Then
-        ArgumentCaptor<TicketDocument> captor = ArgumentCaptor.forClass(TicketDocument.class);
-        verify(ticketRepository, times(2)).save(captor.capture());
-        assertEquals(TicketStatus.FAILED, captor.getValue().getStatus());
+        verify(ticketMutationExecutor, never()).mutate(any(), any());
+        verifyNoInteractions(aiSummarizationService);
     }
 }

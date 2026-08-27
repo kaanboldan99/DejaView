@@ -14,6 +14,9 @@ import org.springframework.data.elasticsearch.core.ElasticsearchOperations;
 import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.stereotype.Service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -31,14 +34,17 @@ public class TicketService {
     private final TicketRepository ticketRepository;
     private final ElasticsearchOperations elasticsearchOperations;
     private final TicketAnalysisProducer ticketAnalysisProducer;
+    private final TicketMutationExecutor ticketMutationExecutor;
 
     @Autowired
     public TicketService(TicketRepository ticketRepository,
                           ElasticsearchOperations elasticsearchOperations,
-                          TicketAnalysisProducer ticketAnalysisProducer) {
+                          TicketAnalysisProducer ticketAnalysisProducer,
+                          TicketMutationExecutor ticketMutationExecutor) {
         this.ticketRepository = ticketRepository;
         this.elasticsearchOperations = elasticsearchOperations;
         this.ticketAnalysisProducer = ticketAnalysisProducer;
+        this.ticketMutationExecutor = ticketMutationExecutor;
     }
 
     // GlobalExceptionHandler için yapay zekasız kayıt metodu
@@ -63,10 +69,20 @@ public class TicketService {
 
     // Controller katmanından gelen manuel bilet oluşturma isteği.
     // Aynı başlıkla (büyük/küçük harf duyarsız) daha önce açılmış bir kayıt varsa
-    // yeni kayıt açmak yerine mevcut kayda "yeni bir görülme" olarak işlenir:
-    // başlık değişmez, occurrence sayısı artar, tag'ler birleştirilir. AI analizi
-    // her iki durumda da RabbitMQ üzerinden arka planda çalışır; sonuç geldiğinde
-    // solutions listesine eklenir (üzerine yazılmaz).
+    // yeni kayıt açmak yerine mevcut kayda "yeni bir görülme" olarak işlenir: başlık
+    // değişmez, occurrence sayısı artar, tag'ler birleştirilir. Doküman ID'si başlıktan
+    // deterministik olarak türetilir (bkz. computeTicketId) — böylece aynı başlık için
+    // iki AYRI doküman oluşması yapısal olarak engellenir; concurrent güncellemeler
+    // TicketMutationExecutor ile optimistic locking + retry kullanılarak güvenli şekilde
+    // birleştirilir (bkz. TicketDocument@Version). AI analizi her iki durumda da RabbitMQ
+    // üzerinden arka planda çalışır; sonuç geldiğinde solutions listesine eklenir.
+    //
+    // Bilinen sınır: iki isteğin TAM OLARAK aynı anda, o başlık için ilk kez ticket
+    // oluşturmaya çalıştığı (yani ikisi de "mevcut değil" görüp yeni doküman yazmaya
+    // çalıştığı) çok nadir durumda, ES tarafında gerçek "create-only" (op_type=create)
+    // ataomikliği kullanılmadığı için ikinci yazma ilkini ezebilir. Pratikte ihmal
+    // edilebilir bir risk (aynı milisaniyede aynı başlıkla ilk kayıt); tespit edilirse
+    // ElasticsearchOperations üzerinden IndexQuery.OpType.CREATE ile sıkılaştırılabilir.
     public TicketResponse createTicket(CreateTicketRequest request, String username) {
         String title = (request.getTitle() != null && !request.getTitle().isBlank())
                 ? request.getTitle().trim()
@@ -74,22 +90,21 @@ public class TicketService {
         String titleNormalized = title.toLowerCase();
         String description = request.getDescription() != null ? request.getDescription() : "Manuel Kayıt";
         List<String> requestedTags = request.getTags() != null ? request.getTags() : List.of("Manual");
-
-        Optional<TicketDocument> existing = ticketRepository.findByTitleNormalized(titleNormalized);
+        String ticketId = computeTicketId(titleNormalized);
 
         TicketDocument saved;
-        if (existing.isPresent()) {
-            TicketDocument ticket = existing.get();
-            ticket.setOccurrenceCount(ticket.getOccurrenceCount() + 1);
-            ticket.setLastOccurrenceAt(Instant.now());
-            ticket.setAiTags(mergeTags(ticket.getAiTags(), requestedTags));
-            ticket.setStatus(TicketStatus.PENDING);
-
-            saved = ticketRepository.save(ticket);
+        if (ticketRepository.existsById(ticketId)) {
+            saved = ticketMutationExecutor.mutate(ticketId, ticket -> {
+                ticket.setOccurrenceCount(ticket.getOccurrenceCount() + 1);
+                ticket.setLastOccurrenceAt(Instant.now());
+                ticket.setAiTags(mergeTags(ticket.getAiTags(), requestedTags));
+                ticket.setStatus(TicketStatus.PENDING);
+            });
             logger.info("Aynı başlıkla mevcut ticket bulundu, occurrence artırıldı. id={}, title='{}', occurrenceCount={}",
                     saved.getId(), title, saved.getOccurrenceCount());
         } else {
             TicketDocument ticket = new TicketDocument();
+            ticket.setId(ticketId);
             ticket.setTitle(title);
             ticket.setTitleNormalized(titleNormalized);
             ticket.setErrorMessage(description);
@@ -110,6 +125,24 @@ public class TicketService {
         ticketAnalysisProducer.enqueueAnalysis(saved.getId(), description);
 
         return TicketResponse.fromTicket(saved);
+    }
+
+    // Aynı normalize edilmiş başlık her zaman aynı hash'i (dolayısıyla aynı doküman ID'sini)
+    // üretir. Bu, "aynı başlık = aynı kayıt" kuralını sorgu bazlı aramaya değil,
+    // dokümanın kimliğine bağlar; başlık bir daha asla değişmeyeceği için stabildir.
+    private String computeTicketId(String titleNormalized) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(titleNormalized.getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 her JVM'de garanti mevcuttur; pratikte hiç tetiklenmez.
+            throw new IllegalStateException("SHA-256 algoritması bulunamadı", e);
+        }
     }
 
     private List<String> mergeTags(List<String> existingTags, List<String> newTags) {
@@ -152,11 +185,7 @@ public class TicketService {
     // Admin: mevcut bir ticket için AI analizini yeniden tetikler. Sonuç, mevcut
     // solutions listesine yeni bir giriş olarak eklenir (var olanlar korunur).
     public TicketResponse resummarizeTicket(String id) {
-        TicketDocument ticket = ticketRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("Ticket bulunamadı"));
-
-        ticket.setStatus(TicketStatus.PENDING);
-        TicketDocument saved = ticketRepository.save(ticket);
+        TicketDocument saved = ticketMutationExecutor.mutate(id, ticket -> ticket.setStatus(TicketStatus.PENDING));
 
         ticketAnalysisProducer.enqueueAnalysis(saved.getId(), saved.getErrorMessage());
         logger.info("Ticket için AI analizi yeniden kuyruğa alındı (admin). id={}", id);
