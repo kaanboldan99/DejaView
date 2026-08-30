@@ -18,5 +18,20 @@ services:
       - "5672:5672"   # AMQP
       - "15672:15672" # Yönetim paneli: http://localhost:15672 (guest/guest)
 
+  # Sadece prod profilinde kullanılıyor (bkz. application-prod.properties).
+  # dev profili/testler H2 (bellek içi) kullandığı için buna ihtiyaç duymaz.
+  postgres:
+    image: postgres:16
+    container_name: dejaview-postgres
+    environment:
+      - POSTGRES_DB=dejaview
+      - POSTGRES_USER=dejaview
+      - POSTGRES_PASSWORD=dejaview
+    ports:
+      - "5432:5432"
+    volumes:
+      - dejaview-postgres-data:/var/lib/postgresql/data
+
 volumes:
   dejaview-es-data:
+  dejaview-postgres-data:

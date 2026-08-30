@@ -23,7 +23,7 @@ ayrıca kullanıcı ekleyebilir ve kayıtları AI'a yeniden özetletebilir.
 
 - JDK 17
 - Maven
-- Docker (Elasticsearch ve RabbitMQ için)
+- Docker (Elasticsearch, RabbitMQ; canlı ortamda PostgreSQL için)
 - Bir Gemini API anahtarı ([aistudio.google.com/apikey](https://aistudio.google.com/apikey))
 
 ## Kurulum
@@ -78,6 +78,23 @@ bağlanıyorsanız) şu ortam değişkenlerini set edin:
 | `RABBITMQ_USERNAME` | `guest` |
 | `RABBITMQ_PASSWORD` | `guest` |
 
+## Canlı ortam (prod profili)
+
+Varsayılan `dev` profili kullanıcı verisini H2'de bellek içi tutar — sadece
+geliştirme/test için, restart'ta silinir. Gerçek kullanımda `prod` profiliyle
+PostgreSQL'e geçin:
+
+```bash
+export SPRING_PROFILES_ACTIVE=prod
+export DB_HOST=localhost   # docker-compose'daki postgres servisini kullanıyorsanız
+export DB_PASSWORD=dejaview
+mvn spring-boot:run
+```
+
+`docker-compose.yml` PostgreSQL'i de içeriyor (`docker compose up -d` zaten
+başlatır). Farklı bir veritabanı kullanıyorsanız `DB_HOST`, `DB_PORT`, `DB_NAME`,
+`DB_USERNAME`, `DB_PASSWORD` ile yönlendirin.
+
 ## Roller
 
 - **USER** — kendi kayıtlarını oluşturur/siler, profilini günceller.
@@ -118,7 +135,8 @@ GEMINI_API_KEY=xxxxx mvn test -Dtest=GeminiServiceLiveTest
 
 ## Bilinmesi gerekenler
 
-- Kullanıcı verisi H2'de bellek içi tutulur — uygulama her yeniden başladığında
-  silinir (seed edilen `admin` hariç). Kayıtlar (Elasticsearch'te) kalıcıdır.
+- `dev` profilinde kullanıcı verisi H2'de bellek içi tutulur — uygulama her
+  yeniden başladığında silinir (seed edilen `admin` hariç). `prod` profilinde
+  PostgreSQL kalıcıdır. Kayıtlar (Elasticsearch'te) her iki profilde de kalıcıdır.
 - Elasticsearch veya RabbitMQ'ya erişilemezse uygulama çökmez; kayıtlar
   `PENDING`'de bekler, bağlantı kurulana kadar arka planda tekrar dener.
