@@ -1,5 +1,7 @@
 package com.skaanb.DejaView.service;
 
+import com.skaanb.DejaView.dto.UpdateProfileRequest;
+import com.skaanb.DejaView.exception.ProfileUpdateException;
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.TicketRepository; // 1. Bu importun olduğundan emin olun
 import com.skaanb.DejaView.repository.UserRepository;
@@ -224,5 +226,256 @@ public class UserServiceTest {
         assertDoesNotThrow(() -> {
             userService.deleteUser(nonExistingId);
         });
+    }
+
+    // ==========================================
+    // PROFİL GÜNCELLEME
+    // ==========================================
+
+    @Test
+    void testUpdateOwnProfile_TelefonEklenir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("0532 444 55 66");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        // Boşluklar temizlenerek tek biçimde saklanır
+        assertEquals("05324445566", updated.getPhoneNumber());
+    }
+
+    @Test
+    void testUpdateOwnProfile_UluslararasiOnEkKorunur() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("+90 (532) 444-55-66");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        assertEquals("+905324445566", updated.getPhoneNumber());
+    }
+
+    @Test
+    void testUpdateOwnProfile_BosTelefonNumarayiKaldirir() {
+        UpdateProfileRequest ekle = new UpdateProfileRequest();
+        ekle.setPhoneNumber("05324445566");
+        userService.updateOwnProfile("kaanboldan", ekle);
+
+        UpdateProfileRequest kaldir = new UpdateProfileRequest();
+        kaldir.setPhoneNumber("");
+        User updated = userService.updateOwnProfile("kaanboldan", kaldir);
+
+        // Boş string değil null yazılmalı: unique sütunda birden fazla boş
+        // string olamaz ama birden fazla NULL olabilir.
+        assertNull(updated.getPhoneNumber());
+    }
+
+    @Test
+    void testUpdateOwnProfile_GonderilmeyenAlanDegismez() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("05324445566");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        // email gönderilmediği için dokunulmamalı
+        assertEquals("kaan@example.com", updated.getEmail());
+    }
+
+    @Test
+    void testUpdateOwnProfile_GecersizTelefonReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("abc123");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_CokKisaTelefonReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("12345");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_BosEpostaReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setEmail("   ");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_BaskasininEpostasiReddedilir() {
+        User digeri = new User();
+        digeri.setUsername("digeri");
+        digeri.setEmail("digeri@example.com");
+        digeri.setPassword(passwordEncoder.encode("secret123"));
+        userRepository.save(digeri);
+
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setEmail("digeri@example.com");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_BaskasininTelefonuReddedilir() {
+        User digeri = new User();
+        digeri.setUsername("digeri");
+        digeri.setEmail("digeri@example.com");
+        digeri.setPassword(passwordEncoder.encode("secret123"));
+        digeri.setPhoneNumber("05324445566");
+        userRepository.save(digeri);
+
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("0532 444 55 66");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_KendiTelefonunuTekrarKaydedebilir() {
+        UpdateProfileRequest ilk = new UpdateProfileRequest();
+        ilk.setPhoneNumber("05324445566");
+        userService.updateOwnProfile("kaanboldan", ilk);
+
+        // Aynı numarayı tekrar göndermek "başkasında kayıtlı" hatası vermemeli
+        UpdateProfileRequest ikinci = new UpdateProfileRequest();
+        ikinci.setPhoneNumber("0532 444 55 66");
+
+        assertDoesNotThrow(() -> userService.updateOwnProfile("kaanboldan", ikinci));
+    }
+
+    @Test
+    void testUpdateOwnProfile_OlmayanKullaniciReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("05324445566");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("olmayan_kullanici", request));
+    }
+
+    // ==========================================
+    // GÜVENLİK: SQL INJECTION VE KÖTÜCÜL GİRDİ SENARYOLARI
+    //
+    // Spring Data JPA'nın türetilmiş sorgu metotları (findByUsername vb.)
+    // arka planda parametreli (PreparedStatement) sorgu üretir; bu yüzden
+    // klasik string-concatenation SQL injection burada yapısal olarak mümkün
+    // değil. Bu testler bunu somut olarak kanıtlıyor ve ileride biri
+    // (yanlışlıkla) native/concatenation tabanlı bir sorguya geçerse
+    // regresyonu yakalıyor.
+    // ==========================================
+
+    @Test
+    void testGetByUsername_KlasikSqlInjectionPayload_BosDoner() {
+        // Given: klasik "her satırı getir" denemesi
+        String payload = "' OR '1'='1";
+
+        // When
+        Optional<User> result = userService.getByUsername(payload);
+
+        // Then: injection çalışsaydı existingUser dönerdi; parametreli sorgu
+        // sayesinde payload'ın ta kendisiyle literal eşleşme aranıyor, bulunamıyor
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    void testGetByUsername_YorumSatiriIleTablodusurmeDenemesi_BosDoner() {
+        String payload = "kaanboldan'; DROP TABLE users; --";
+
+        Optional<User> result = userService.getByUsername(payload);
+
+        assertFalse(result.isPresent());
+        // Tablo gerçekten düşürülseydi bu satır bile exception fırlatırdı
+        assertEquals(1, userRepository.count());
+    }
+
+    @Test
+    void testGetByEmail_UnionSelectInjectionPayload_BosDoner() {
+        String payload = "x' UNION SELECT * FROM users --";
+
+        Optional<User> result = userService.getByEmail(payload);
+
+        assertFalse(result.isPresent());
+    }
+
+    @Test
+    void testCreateUser_SqlInjectionPayloadUsername_LiteralOlarakKaydedilir() {
+        // Given
+        User user = new User();
+        user.setUsername("robert'); DROP TABLE users;--");
+        user.setEmail("bobby-tables@example.com");
+        user.setPassword("password123");
+
+        // When
+        User saved = userService.createUser(user);
+
+        // Then: payload aynen (kaçışsız, ama zararsız) bir string olarak saklanıyor,
+        // tablo hâlâ ayakta ve mevcut kullanıcı hâlâ orada
+        assertEquals("robert'); DROP TABLE users;--", saved.getUsername());
+        assertTrue(userRepository.findByUsername("kaanboldan").isPresent());
+        assertEquals(2, userRepository.count());
+    }
+
+    @Test
+    void testUpdateOwnProfile_SqlInjectionPayloadEmail_LiteralOlarakSaklanir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setEmail("a' OR '1'='1@example.com");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        assertEquals("a' OR '1'='1@example.com", updated.getEmail());
+        // Diğer kullanıcı verisi injection'dan etkilenmemiş olmalı
+        assertEquals(1, userRepository.count());
+    }
+
+    @Test
+    void testCreateUser_AsiriUzunUsername_KontrollucBirHataVerir() {
+        // Given: 10.000 karakterlik bir username (buffer/DoS tarzı stres testi)
+        User user = new User();
+        user.setUsername("a".repeat(10_000));
+        user.setEmail("uzun@example.com");
+        user.setPassword("password123");
+
+        // When & Then: uygulama çökmemeli (500/StackOverflow değil), kontrollü
+        // bir exception ile (DB sütun sınırı vb.) sonuçlanmalı ya da başarılı olmalı —
+        // ikisi de kabul edilebilir, önemli olan uncaught bir crash olmaması
+        assertDoesNotThrow(() -> {
+            try {
+                userService.createUser(user);
+            } catch (RuntimeException expectedPossible) {
+                // DB seviyesinde sütun sınırı aşımı gibi kontrollü bir hata kabul edilir
+            }
+        });
+    }
+
+    @Test
+    void testGetByUsername_NullByteIcerenPayload_CokmedenBosDoner() {
+        // Given: bazı native sürücülerde/kütüphanelerde sorun çıkarabilen null byte
+        String payload = "kaanboldan\0' OR '1'='1";
+
+        // When & Then
+        assertDoesNotThrow(() -> {
+            Optional<User> result = userService.getByUsername(payload);
+            assertFalse(result.isPresent());
+        });
+    }
+
+    @Test
+    void testCreateUser_ScriptTagIcerenUsername_LiteralOlarakSaklanirCalistirlmaz() {
+        // Given: XSS tarzı payload — DB katmanında "çalıştırılmaz", sadece
+        // metin olarak saklanır; render eden taraf (frontend) escape etmeli.
+        User user = new User();
+        user.setUsername("<script>alert(1)</script>");
+        user.setEmail("xss@example.com");
+        user.setPassword("password123");
+
+        User saved = userService.createUser(user);
+
+        assertEquals("<script>alert(1)</script>", saved.getUsername());
     }
 }

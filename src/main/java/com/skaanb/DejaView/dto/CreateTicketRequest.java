@@ -9,6 +9,12 @@ public class CreateTicketRequest {
     private List<String> tags;
     private Long userId;
 
+    /**
+     * Kaydın hangi servise ait olduğu. Boş bırakılırsa TicketService
+     * varsayılan bir değer atar; eski istemcilerin bozulmaması için zorunlu değil.
+     */
+    private String serviceName;
+
     public CreateTicketRequest() {}
 
     public CreateTicketRequest(String title, String description, List<String> tags, Long userId) {
@@ -16,6 +22,11 @@ public class CreateTicketRequest {
         this.description = description;
         this.tags = tags;
         this.userId = userId;
+    }
+
+    public CreateTicketRequest(String title, String description, List<String> tags, Long userId, String serviceName) {
+        this(title, description, tags, userId);
+        this.serviceName = serviceName;
     }
 
     // Getters & Setters
@@ -50,5 +61,13 @@ public class CreateTicketRequest {
 
     public void setUserId(Long userId) {
         this.userId = userId;
+    }
+
+    public String getServiceName() {
+        return serviceName;
+    }
+
+    public void setServiceName(String serviceName) {
+        this.serviceName = serviceName;
     }
 }

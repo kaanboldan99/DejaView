@@ -21,12 +21,20 @@ public class GeminiService implements AiSummarizationService {
     @Value("${gemini.api.key}")
     private String apiKey;
 
+    // Model adı sabit kodlanmıyor; application.properties'teki gemini.api.url'den okunuyor.
+    // Önceden burada sabit "gemini-pro" kullanılıyordu — bu model Google tarafından
+    // kaldırıldığı için her çağrı 404 ile başarısız oluyordu (canlı API'ye karşı test
+    // edilerek doğrulandı). Model adı zaman içinde değiştiği için konfigürasyondan
+    // okunması, kod değişikliği gerektirmeden güncellenebilmesini sağlıyor.
+    @Value("${gemini.api.url}")
+    private String apiUrl;
+
     private final RestTemplate restTemplate = new RestTemplate();
 
     @Override
     public String summarize(String description) {
         try {
-            String url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + apiKey;
+            String url = apiUrl + "?key=" + apiKey;
 
             // Gemini API'nin beklediği JSON veri yapısı
             Map<String, Object> requestBody = Map.of(
