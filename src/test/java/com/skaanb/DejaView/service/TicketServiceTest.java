@@ -279,4 +279,84 @@ public class TicketServiceTest {
         verify(ticketRepository).findAll();
         verifyNoInteractions(elasticsearchOperations);
     }
+
+    // ==========================================
+    // SERVİS ADI (serviceName)
+    // ==========================================
+
+    @Test
+    void testCreateTicket_IstemcininVerdigiServisAdiKullanilir() {
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("Ödeme zaman aşımı");
+        request.setDescription("Checkout adımında timeout.");
+        request.setServiceName("odeme-servisi");
+
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        assertEquals("odeme-servisi", response.getServiceName());
+    }
+
+    @Test
+    void testCreateTicket_ServisAdindakiBosluklarKirpilir() {
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("Kuyruk doldu");
+        request.setDescription("SMS kuyruğu tıkandı.");
+        request.setServiceName("   bildirim-servisi   ");
+
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        // serviceName Keyword alanı: "odeme" ile "odeme " ayrı servis görünmemeli
+        assertEquals("bildirim-servisi", response.getServiceName());
+    }
+
+    @Test
+    void testCreateTicket_ServisAdiVerilmezseVarsayilanAtanir() {
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("Servissiz kayıt");
+        request.setDescription("Servis alanı gönderilmedi.");
+
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        // Eskiden burada sabit "TicketController" yazılıydı
+        assertEquals("Manuel Kayıt", response.getServiceName());
+    }
+
+    @Test
+    void testCreateTicket_BosServisAdiVarsayilanaDuser() {
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("Boş servis adı");
+        request.setDescription("Sadece boşluk gönderildi.");
+        request.setServiceName("   ");
+
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        assertEquals("Manuel Kayıt", response.getServiceName());
+    }
+
+    @Test
+    void testCreateTicket_AsiriUzunServisAdiKisaltilir() {
+        CreateTicketRequest request = new CreateTicketRequest();
+        request.setTitle("Uzun servis adı");
+        request.setDescription("64 karakterden uzun servis adı gönderildi.");
+        request.setServiceName("s".repeat(200));
+
+        when(ticketRepository.existsById(anyString())).thenReturn(false);
+        when(ticketRepository.save(any(TicketDocument.class))).thenAnswer(i -> i.getArgument(0));
+
+        TicketResponse response = ticketService.createTicket(request, "kaanboldan");
+
+        assertEquals(64, response.getServiceName().length());
+    }
 }

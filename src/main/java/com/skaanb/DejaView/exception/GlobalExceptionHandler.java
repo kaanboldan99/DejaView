@@ -27,6 +27,24 @@ public class GlobalExceptionHandler {
         this.ticketRepository = ticketRepository;
     }
 
+    /**
+     * Kullanıcı kaynaklı profil hataları (çakışan e-posta/telefon, geçersiz
+     * numara). Sistem hatası olmadığı için Elasticsearch'e ticket yazılmaz;
+     * aşağıdaki catch-all handler'a düşmesin diye ayrı ele alınır.
+     */
+    @ExceptionHandler(ProfileUpdateException.class)
+    public ResponseEntity<Object> handleProfileUpdate(ProfileUpdateException ex, HttpServletRequest request) {
+        logger.info("Profil güncelleme reddedildi. path={} | sebep={}", request.getRequestURI(), ex.getMessage());
+
+        return ResponseEntity.badRequest().body(Map.of(
+                "timestamp", LocalDateTime.now(),
+                "status", HttpStatus.BAD_REQUEST.value(),
+                "error", "Bad Request",
+                "message", ex.getMessage(),
+                "path", request.getRequestURI()
+        ));
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Object> handleAllExceptions(Exception ex, HttpServletRequest request) {
 

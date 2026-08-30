@@ -1,5 +1,7 @@
 package com.skaanb.DejaView.service;
 
+import com.skaanb.DejaView.dto.UpdateProfileRequest;
+import com.skaanb.DejaView.exception.ProfileUpdateException;
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.TicketRepository; // 1. Bu importun olduğundan emin olun
 import com.skaanb.DejaView.repository.UserRepository;
@@ -224,5 +226,136 @@ public class UserServiceTest {
         assertDoesNotThrow(() -> {
             userService.deleteUser(nonExistingId);
         });
+    }
+
+    // ==========================================
+    // PROFİL GÜNCELLEME
+    // ==========================================
+
+    @Test
+    void testUpdateOwnProfile_TelefonEklenir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("0532 444 55 66");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        // Boşluklar temizlenerek tek biçimde saklanır
+        assertEquals("05324445566", updated.getPhoneNumber());
+    }
+
+    @Test
+    void testUpdateOwnProfile_UluslararasiOnEkKorunur() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("+90 (532) 444-55-66");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        assertEquals("+905324445566", updated.getPhoneNumber());
+    }
+
+    @Test
+    void testUpdateOwnProfile_BosTelefonNumarayiKaldirir() {
+        UpdateProfileRequest ekle = new UpdateProfileRequest();
+        ekle.setPhoneNumber("05324445566");
+        userService.updateOwnProfile("kaanboldan", ekle);
+
+        UpdateProfileRequest kaldir = new UpdateProfileRequest();
+        kaldir.setPhoneNumber("");
+        User updated = userService.updateOwnProfile("kaanboldan", kaldir);
+
+        // Boş string değil null yazılmalı: unique sütunda birden fazla boş
+        // string olamaz ama birden fazla NULL olabilir.
+        assertNull(updated.getPhoneNumber());
+    }
+
+    @Test
+    void testUpdateOwnProfile_GonderilmeyenAlanDegismez() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("05324445566");
+
+        User updated = userService.updateOwnProfile("kaanboldan", request);
+
+        // email gönderilmediği için dokunulmamalı
+        assertEquals("kaan@example.com", updated.getEmail());
+    }
+
+    @Test
+    void testUpdateOwnProfile_GecersizTelefonReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("abc123");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_CokKisaTelefonReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("12345");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_BosEpostaReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setEmail("   ");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_BaskasininEpostasiReddedilir() {
+        User digeri = new User();
+        digeri.setUsername("digeri");
+        digeri.setEmail("digeri@example.com");
+        digeri.setPassword(passwordEncoder.encode("secret123"));
+        userRepository.save(digeri);
+
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setEmail("digeri@example.com");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_BaskasininTelefonuReddedilir() {
+        User digeri = new User();
+        digeri.setUsername("digeri");
+        digeri.setEmail("digeri@example.com");
+        digeri.setPassword(passwordEncoder.encode("secret123"));
+        digeri.setPhoneNumber("05324445566");
+        userRepository.save(digeri);
+
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("0532 444 55 66");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("kaanboldan", request));
+    }
+
+    @Test
+    void testUpdateOwnProfile_KendiTelefonunuTekrarKaydedebilir() {
+        UpdateProfileRequest ilk = new UpdateProfileRequest();
+        ilk.setPhoneNumber("05324445566");
+        userService.updateOwnProfile("kaanboldan", ilk);
+
+        // Aynı numarayı tekrar göndermek "başkasında kayıtlı" hatası vermemeli
+        UpdateProfileRequest ikinci = new UpdateProfileRequest();
+        ikinci.setPhoneNumber("0532 444 55 66");
+
+        assertDoesNotThrow(() -> userService.updateOwnProfile("kaanboldan", ikinci));
+    }
+
+    @Test
+    void testUpdateOwnProfile_OlmayanKullaniciReddedilir() {
+        UpdateProfileRequest request = new UpdateProfileRequest();
+        request.setPhoneNumber("05324445566");
+
+        assertThrows(ProfileUpdateException.class,
+                () -> userService.updateOwnProfile("olmayan_kullanici", request));
     }
 }

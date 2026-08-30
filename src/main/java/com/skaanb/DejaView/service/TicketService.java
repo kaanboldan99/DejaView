@@ -29,6 +29,12 @@ import java.util.stream.StreamSupport;
 @Service
 public class TicketService {
 
+    /** Elle açılan ve servisi belirtilmeyen kayıtlar için varsayılan servis adı. */
+    private static final String DEFAULT_SERVICE_NAME = "Manuel Kayıt";
+
+    /** serviceName Keyword alanı; aşırı uzun değerler filtre listesini bozar. */
+    private static final int MAX_SERVICE_NAME_LENGTH = 64;
+
     private static final Logger logger = LoggerFactory.getLogger(TicketService.class);
 
     private final TicketRepository ticketRepository;
@@ -90,6 +96,7 @@ public class TicketService {
         String titleNormalized = title.toLowerCase();
         String description = request.getDescription() != null ? request.getDescription() : "Manuel Kayıt";
         List<String> requestedTags = request.getTags() != null ? request.getTags() : List.of("Manual");
+        String serviceName = resolveServiceName(request.getServiceName());
         String ticketId = computeTicketId(titleNormalized);
 
         TicketDocument saved;
@@ -109,7 +116,7 @@ public class TicketService {
             ticket.setTitleNormalized(titleNormalized);
             ticket.setErrorMessage(description);
             ticket.setStackTrace("Kullanıcı tarafından manuel oluşturuldu. Oluşturan: " + username);
-            ticket.setServiceName("TicketController");
+            ticket.setServiceName(serviceName);
             ticket.setCreatedAt(Instant.now());
             ticket.setLastOccurrenceAt(Instant.now());
             ticket.setAiGeneratedDescription("AI analizi bekleniyor...");
@@ -130,6 +137,27 @@ public class TicketService {
     // Aynı normalize edilmiş başlık her zaman aynı hash'i (dolayısıyla aynı doküman ID'sini)
     // üretir. Bu, "aynı başlık = aynı kayıt" kuralını sorgu bazlı aramaya değil,
     // dokümanın kimliğine bağlar; başlık bir daha asla değişmeyeceği için stabildir.
+    /**
+     * İstemciden gelen servis adını temizler.
+     *
+     * serviceName Elasticsearch'te Keyword; yani birebir eşleşmeyle filtrelenir.
+     * Bu yüzden baştaki/sondaki boşluklar kırpılır ve makul bir uzunlukla
+     * sınırlanır — aksi halde "odeme" ile "odeme " ayrı iki servis gibi görünür.
+     *
+     * Boş gelirse kaydın elle açıldığını belirten varsayılan kullanılır.
+     * (Önceden burada sabit "TicketController" yazılıydı; bu bir servis adı
+     * değil, controller sınıfının adıydı.)
+     */
+    private String resolveServiceName(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return DEFAULT_SERVICE_NAME;
+        }
+        String trimmed = raw.trim();
+        return trimmed.length() > MAX_SERVICE_NAME_LENGTH
+                ? trimmed.substring(0, MAX_SERVICE_NAME_LENGTH)
+                : trimmed;
+    }
+
     private String computeTicketId(String titleNormalized) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");

@@ -15,6 +15,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     // Kullanıcıyı email'e göre bul
     Optional<User> findByEmail(String email);
 
+    // Telefon numarası unique; profil güncellemede çakışma kontrolü için
+    Optional<User> findByPhoneNumber(String phoneNumber);
+
     // Username var mı yok mu kontrolü (örneğin kayıt öncesi)
     boolean existsByUsername(String username);
 

@@ -48,11 +48,17 @@ public class SecurityConfig {
                 .csrf(csrf -> csrf.disable())
                 .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .userDetailsService(customUserDetailsService)
                 .authorizeHttpRequests(auth -> auth
                         // dev profilinde tüm isteklere (permitAll) izin veriyoruz
                         .anyRequest().permitAll()
-                );
-        // JWT filtresini buraya eklemiyoruz, böylece token kontrolü de bypass edilmiş oluyor.
+                )
+                // Yetkilendirme permitAll olduğu için token'sız istekler yine geçer;
+                // ancak token GÖNDERİLDİĞİNDE kullanıcı tanınır. Buna ihtiyaç var:
+                // /api/users/me ve ticket sahipliği "kim olduğunu" bilmek zorunda,
+                // aksi halde dev'de herkes "anonymous_user" görünür.
+                .addFilterBefore(jwtAuthenticationFilter(),
+                        UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }
