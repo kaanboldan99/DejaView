@@ -1,0 +1,22 @@
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.18.1
+    container_name: dejaview-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+    volumes:
+      - dejaview-es-data:/usr/share/elasticsearch/data
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: dejaview-rabbitmq
+    ports:
+      - "5672:5672"   # AMQP
+      - "15672:15672" # Yönetim paneli: http://localhost:15672 (guest/guest)
+
+volumes:
+  dejaview-es-data:
