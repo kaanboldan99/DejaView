@@ -42,7 +42,14 @@ public class ElasticsearchConfig {
 
         return RestClient.builder(HttpHost.create(esUris))
                 .setHttpClientConfigCallback(httpClientBuilder ->
-                        httpClientBuilder.setDefaultCredentialsProvider(credentialsProvider)
+                        httpClientBuilder
+                                .setDefaultCredentialsProvider(credentialsProvider)
+                                // Varsayılan bağlantı havuzu küçük (kütüphane varsayılanı).
+                                // Ticket listeleme/arama/oluşturma en sık kullanılan uçlar ve hepsi
+                                // buradan geçiyor; çok sayıda eşzamanlı kullanıcıda (örn. 100+) havuz
+                                // dolup istekler kuyrukta beklemesin diye açıkça büyütüyoruz.
+                                .setMaxConnTotal(100)
+                                .setMaxConnPerRoute(100)
                 )
                 .build();
     }
