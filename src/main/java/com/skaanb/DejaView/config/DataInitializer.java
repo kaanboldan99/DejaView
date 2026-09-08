@@ -5,10 +5,24 @@ import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
+/**
+ * İlk admin hesabını oluşturur.
+ *
+ * Şifre ARTIK KODDA SABİT DEĞİL. Önceden her profilde — üretim dahil —
+ * {@code admin}/{@code admin} hesabı açılıyor ve şifre INFO seviyesinde log
+ * dosyasına düz metin yazılıyordu. Artık şifre {@code dejaview.admin.password}
+ * (üretimde {@code ADMIN_PASSWORD} ortam değişkeni) üzerinden geliyor; ayar
+ * boşsa hiç hesap oluşturulmaz. Böylece "kurulumu unutulmuş" bir sunucuda
+ * tahmin edilebilir bir admin hesabı kalmıyor.
+ *
+ * dev profilinde şifre {@code application-dev.properties} içinden geliyor,
+ * yani yerel geliştirme akışı değişmiyor.
+ */
 @Component
 public class DataInitializer implements CommandLineRunner {
 
@@ -17,36 +31,46 @@ public class DataInitializer implements CommandLineRunner {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
-    public DataInitializer(UserRepository userRepository, PasswordEncoder passwordEncoder) {
+    private final String adminUsername;
+    private final String adminEmail;
+    private final String adminPassword;
+
+    public DataInitializer(UserRepository userRepository,
+                           PasswordEncoder passwordEncoder,
+                           @Value("${dejaview.admin.username:admin}") String adminUsername,
+                           @Value("${dejaview.admin.email:admin@dejaview.com}") String adminEmail,
+                           @Value("${dejaview.admin.password:}") String adminPassword) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
+        this.adminUsername = adminUsername;
+        this.adminEmail = adminEmail;
+        this.adminPassword = adminPassword;
     }
 
     @Override
-    public void run(String... args) throws Exception {
-        String adminUsername = "admin";
-        String adminEmail = "admin@dejaview.com";
-        String adminRawPassword = "admin";
-
-        // Veritabanında admin kullanıcısının zaten var olup olmadığını kontrol ediyoruz
-        if (!userRepository.existsByUsername(adminUsername)) {
-            User adminUser = new User();
-            adminUser.setUsername(adminUsername);
-            adminUser.setEmail(adminEmail);
-            adminUser.setRole(Role.ADMIN);
-
-            // Güvenlik kurallarınız gereği şifreyi BCryptPasswordEncoder ile hashliyoruz
-            adminUser.setPassword(passwordEncoder.encode(adminRawPassword));
-
-            userRepository.save(adminUser);
-
-            logger.info("====================================================");
-            logger.info("DejaView: Varsayılan 'admin' kullanıcısı otomatik oluşturuldu!");
-            logger.info("Kullanıcı Adı: {}", adminEmail);
-            logger.info("Şifre: {}", adminRawPassword);
-            logger.info("====================================================");
-        } else {
-            logger.info("DejaView: 'admin' kullanıcısı veritabanında zaten mevcut.");
+    public void run(String... args) {
+        if (userRepository.existsByUsername(adminUsername)) {
+            logger.info("DejaView: '{}' kullanıcısı veritabanında zaten mevcut.", adminUsername);
+            return;
         }
+
+        if (adminPassword == null || adminPassword.isBlank()) {
+            logger.warn("DejaView: başlangıç admin hesabı OLUŞTURULMADI — ADMIN_PASSWORD "
+                    + "(dejaview.admin.password) tanımlı değil. Hesabı oluşturmak için bu değişkeni "
+                    + "set edip uygulamayı yeniden başlatın.");
+            return;
+        }
+
+        User adminUser = new User();
+        adminUser.setUsername(adminUsername);
+        adminUser.setEmail(adminEmail);
+        adminUser.setRole(Role.ADMIN);
+        adminUser.setPassword(passwordEncoder.encode(adminPassword));
+
+        userRepository.save(adminUser);
+
+        // Şifre bilinçli olarak loglanmıyor.
+        logger.info("DejaView: başlangıç admin hesabı oluşturuldu. username={}, email={}",
+                adminUsername, adminEmail);
     }
 }

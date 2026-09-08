@@ -2,6 +2,7 @@ package com.skaanb.DejaView.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.skaanb.DejaView.dto.LoginRequest;
+import com.skaanb.DejaView.model.Role;
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.TicketRepository;
 import com.skaanb.DejaView.repository.UserRepository;
@@ -12,9 +13,12 @@ import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMock
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -26,6 +30,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // bu testler bunu HTTP sınırından itibaren doğruluyor.
 @SpringBootTest
 @AutoConfigureMockMvc
+@ActiveProfiles("dev")
 @Transactional
 class AuthControllerTest {
 
@@ -189,6 +194,67 @@ class AuthControllerTest {
                         .content(body))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.username").value("<script>alert(1)</script>"));
+    }
+
+    // ==========================================
+    // KAYIT UCUNDA YETKİ YÜKSELTME / MASS ASSIGNMENT
+    //
+    // register ucu istemci JSON'unu doğrudan User entity'sine bağlarsa, istemci
+    // kendi rolünü ve hatta kendi id'sini belirleyebilir. Aşağıdaki üç test bunun
+    // yapılamadığını uçtan uca kanıtlıyor.
+    // ==========================================
+
+    @Test
+    void testRegister_GovdedeRolADMINGonderilse_KullaniciYineDeUSEROlur() throws Exception {
+        String body = """
+                {"username":"sinsi","email":"sinsi@example.com","password":"password123","role":"ADMIN"}
+                """;
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk());
+
+        User kaydedilen = userRepository.findByUsername("sinsi").orElseThrow();
+        assertEquals(Role.USER, kaydedilen.getRole(),
+                "Rol istemci gövdesinden belirlenememeli; sunucu her zaman USER atamalı.");
+    }
+
+    @Test
+    void testRegister_GovdedeMevcutIdGonderilse_VarOlanKullaniciEzilmez() throws Exception {
+        User mevcut = userRepository.findByUsername("kaanboldan").orElseThrow();
+        Long mevcutId = mevcut.getId();
+
+        String body = """
+                {"id":%d,"username":"ezici","email":"ezici@example.com","password":"password123"}
+                """.formatted(mevcutId);
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk());
+
+        // save() bir id ile çağrıldığında INSERT değil UPDATE (merge) yapar;
+        // korumasız halde bu, mevcut kullanıcının satırını ezer.
+        assertTrue(userRepository.findByUsername("kaanboldan").isPresent(),
+                "Var olan kullanıcı, register gövdesine id konarak ezilememeli.");
+        assertEquals(mevcutId, userRepository.findByUsername("kaanboldan").orElseThrow().getId());
+        assertEquals(2, userRepository.count(), "Yeni kayıt eklenmeli, mevcut kayıt korunmalı.");
+    }
+
+    @Test
+    void testRegister_YanitSifreHashiniIcermez() throws Exception {
+        String body = """
+                {"username":"gizli","email":"gizli@example.com","password":"password123"}
+                """;
+
+        mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.username").value("gizli"))
+                // BCrypt hash'i istemciye dönmemeli; erişim loglarına ve proxy'lere düşer.
+                .andExpect(jsonPath("$.password").doesNotExist());
     }
 
     private void assertLoginStillWorksForExistingUser() throws Exception {

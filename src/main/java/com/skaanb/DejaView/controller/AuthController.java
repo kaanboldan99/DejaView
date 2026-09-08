@@ -1,6 +1,8 @@
 package com.skaanb.DejaView.controller;
 
 import com.skaanb.DejaView.dto.LoginRequest;
+import com.skaanb.DejaView.dto.RegisterRequest;
+import com.skaanb.DejaView.dto.UserProfileResponse;
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.UserRepository;
 import com.skaanb.DejaView.security.JwtUtil;
@@ -38,14 +40,22 @@ public class AuthController {
         this.userService = userService;
     }
 
+    /**
+     * Yeni kullanıcı kaydı.
+     *
+     * Gövde ham {@code User} entity'si değil, dar bir DTO ile alınıyor: istemci
+     * ne rolünü ne de id'sini belirleyebilir. Yanıt da entity değil
+     * {@link UserProfileResponse} — entity'nin doğrudan döndürülmesi BCrypt
+     * şifre hash'ini istemciye ve erişim loglarına sızdırıyordu.
+     */
     @PostMapping("/register")
-    public ResponseEntity<?> register(@RequestBody User user) {
+    public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
         try {
-            User createdUser = userService.createUser(user);
+            User createdUser = userService.createUser(request);
             logger.info("Yeni kullanıcı kaydedildi. username={}", createdUser.getUsername());
-            return ResponseEntity.ok(createdUser);
+            return ResponseEntity.ok(UserProfileResponse.from(createdUser));
         } catch (RuntimeException e) {
-            logger.warn("Kayıt başarısız. username={}, sebep={}", user.getUsername(), e.getMessage());
+            logger.warn("Kayıt başarısız. username={}, sebep={}", request.getUsername(), e.getMessage());
             return ResponseEntity.badRequest().body(e.getMessage());
         }
     }
@@ -67,7 +77,7 @@ public class AuthController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", "Geçersiz e-posta veya şifre."));
         }
 
-        String token = JwtUtil.generateToken(user);
+        String token = jwtUtil.generateToken(user);
         logger.info("Kullanıcı giriş yaptı. username={}", user.getUsername());
         return ResponseEntity.ok(Map.of("token", token));
     }

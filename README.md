@@ -55,6 +55,8 @@ docker run -d --name dejaview-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-ma
 
 | Değişken | Varsayılan | Ne için |
 |---|---|---|
+| `JWT_SECRET` | *(boş)* | **Zorunlu (dev dışında)** — token imzalama anahtarı. Set edilmezse uygulama açılmaz. En az 32 byte: `openssl rand -base64 48` |
+| `ADMIN_PASSWORD` | *(boş)* | Başlangıç admin hesabının şifresi. Boşsa hesap **hiç oluşturulmaz**. `ADMIN_USERNAME` / `ADMIN_EMAIL` ile hesap adı değiştirilebilir. |
 | `GEMINI_API_KEY` | *(boş)* | **Zorunlu** — set edilmezse AI analizi her zaman başarısız olur (ticket'lar `FAILED`'da kalır). [Google AI Studio](https://aistudio.google.com/apikey)'dan alınır. |
 | `ELASTICSEARCH_HOST` | `wdmch.server` | Elasticsearch'in çalıştığı host |
 | `RABBITMQ_HOST` | `wdmch.server` | RabbitMQ'nun çalıştığı host |
@@ -64,18 +66,36 @@ docker run -d --name dejaview-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-ma
 
 ## Çalıştırma
 
+**Profil artık `application.properties` içinde sabit değil.** Profil verilmezse
+korumalı (`prod`/`default`) güvenlik zinciri devreye girer — yani bir deploy'da
+profili vermeyi unutmak uygulamayı açık bırakmaz, tam tersine `JWT_SECRET`
+eksikse hiç açılmamasına yol açar.
+
+### Yerel geliştirme
+
 ```bash
+export GEMINI_API_KEY=xxxxx
+JAVA_HOME=/path/to/jdk-17 mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
+
+`dev` profilinde (`application-dev.properties`) tüm endpoint'ler kimlik doğrulama
+olmadan erişilebilir, H2 konsolu `/h2-console`'da açık, Swagger UI
+`/swagger-ui.html`'de. Sabit bir dev anahtarı ve `admin` / `admin` hesabı bu
+profille birlikte gelir — **yalnızca yerel geliştirme içindir.**
+
+### Üretim
+
+```bash
+export JWT_SECRET=$(openssl rand -base64 48)
+export ADMIN_PASSWORD=...            # yalnızca ilk kurulumda gerekli
 export GEMINI_API_KEY=xxxxx
 JAVA_HOME=/path/to/jdk-17 mvn spring-boot:run
 ```
 
-`dev` profili varsayılan (`application.properties`): tüm endpoint'ler kimlik
-doğrulama olmadan erişilebilir, H2 konsolu `/h2-console`'da açık, Swagger UI
-`/swagger-ui.html`'de.
-
-İlk açılışta otomatik bir admin kullanıcısı oluşturuluyor:
-- **Kullanıcı adı / e-posta:** `admin` / `admin@dejaview.com`
-- **Şifre:** `admin`
+`JWT_SECRET` tanımlı değilse uygulama açılmaz ve nedenini söyleyerek durur.
+`ADMIN_PASSWORD` boşsa başlangıç admin hesabı oluşturulmaz (uyarı loglanır),
+böylece kurulumu unutulmuş bir sunucuda tahmin edilebilir bir admin kalmaz.
+H2 konsolu bu profilde kapalıdır.
 
 ## Roller
 

@@ -1,7 +1,9 @@
 package com.skaanb.DejaView.service;
 
+import com.skaanb.DejaView.dto.RegisterRequest;
 import com.skaanb.DejaView.dto.UpdateProfileRequest;
 import com.skaanb.DejaView.exception.ProfileUpdateException;
+import com.skaanb.DejaView.model.Role;
 import com.skaanb.DejaView.model.User;
 import com.skaanb.DejaView.repository.UserRepository;
 import org.slf4j.Logger;
@@ -28,18 +30,30 @@ public class UserService {
         this.passwordEncoder = passwordEncoder;
     }
 
-    // Kullanıcı oluştur
-    public User createUser(User user) {
-        if (userRepository.existsByUsername(user.getUsername())) {
+    /**
+     * Yeni kullanıcı oluşturur.
+     *
+     * İstemciden gelen nesne DOĞRUDAN kaydedilmez: burada sıfırdan bir {@link User}
+     * kurulur ve yalnızca izin verilen alanlar kopyalanır. Böylece istemci ne kendi
+     * rolünü (her zaman {@link Role#USER}) ne de kendi id'sini belirleyebilir —
+     * id'nin istemciden gelmesi, var olan bir kullanıcının satırının ezilmesine
+     * yol açıyordu (bkz. {@link com.skaanb.DejaView.dto.RegisterRequest}).
+     */
+    public User createUser(RegisterRequest request) {
+        if (userRepository.existsByUsername(request.getUsername())) {
             throw new RuntimeException("Username already taken");
         }
-        if (userRepository.existsByEmail(user.getEmail())) {
+        if (userRepository.existsByEmail(request.getEmail())) {
             throw new RuntimeException("Email already registered");
         }
 
-        // Şifreyi hashle
-        String hashedPassword = passwordEncoder.encode(user.getPassword());
-        user.setPassword(hashedPassword);
+        User user = new User();
+        user.setUsername(request.getUsername());
+        user.setEmail(request.getEmail());
+        user.setPhoneNumber(request.getPhoneNumber());
+        user.setPassword(passwordEncoder.encode(request.getPassword()));
+        // Rol istemciden ASLA alınmaz.
+        user.setRole(Role.USER);
 
         return userRepository.save(user);
     }

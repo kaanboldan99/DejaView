@@ -1,5 +1,6 @@
 package com.skaanb.DejaView.service;
 
+import com.skaanb.DejaView.dto.RegisterRequest;
 import com.skaanb.DejaView.dto.UpdateProfileRequest;
 import com.skaanb.DejaView.exception.ProfileUpdateException;
 import com.skaanb.DejaView.model.User;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +20,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest
+@ActiveProfiles("dev")
 @Transactional // Her testten sonra H2 veritabanındaki değişiklikleri geri alır (rollback)
 public class UserServiceTest {
 
@@ -57,7 +60,7 @@ public class UserServiceTest {
     @Test
     void testCreateUser_Success() {
         // Given
-        User newUser = new User();
+        RegisterRequest newUser = new RegisterRequest();
         newUser.setUsername("newuser");
         newUser.setEmail("newuser@example.com");
         newUser.setPassword("rawPassword123");
@@ -83,7 +86,7 @@ public class UserServiceTest {
     @Test
     void testCreateUser_ThrowsException_WhenUsernameExists() {
         // Given
-        User duplicateUsernameUser = new User();
+        RegisterRequest duplicateUsernameUser = new RegisterRequest();
         duplicateUsernameUser.setUsername("kaanboldan"); // Zaten mevcut olan kullanıcı adı
         duplicateUsernameUser.setEmail("different@example.com");
         duplicateUsernameUser.setPassword("password123");
@@ -99,7 +102,7 @@ public class UserServiceTest {
     @Test
     void testCreateUser_ThrowsException_WhenEmailExists() {
         // Given
-        User duplicateEmailUser = new User();
+        RegisterRequest duplicateEmailUser = new RegisterRequest();
         duplicateEmailUser.setUsername("differentuser");
         duplicateEmailUser.setEmail("kaan@example.com"); // Zaten mevcut olan e-posta adresi
         duplicateEmailUser.setPassword("password123");
@@ -406,7 +409,7 @@ public class UserServiceTest {
     @Test
     void testCreateUser_SqlInjectionPayloadUsername_LiteralOlarakKaydedilir() {
         // Given
-        User user = new User();
+        RegisterRequest user = new RegisterRequest();
         user.setUsername("robert'); DROP TABLE users;--");
         user.setEmail("bobby-tables@example.com");
         user.setPassword("password123");
@@ -436,7 +439,7 @@ public class UserServiceTest {
     @Test
     void testCreateUser_AsiriUzunUsername_KontrollucBirHataVerir() {
         // Given: 10.000 karakterlik bir username (buffer/DoS tarzı stres testi)
-        User user = new User();
+        RegisterRequest user = new RegisterRequest();
         user.setUsername("a".repeat(10_000));
         user.setEmail("uzun@example.com");
         user.setPassword("password123");
@@ -469,7 +472,7 @@ public class UserServiceTest {
     void testCreateUser_ScriptTagIcerenUsername_LiteralOlarakSaklanirCalistirlmaz() {
         // Given: XSS tarzı payload — DB katmanında "çalıştırılmaz", sadece
         // metin olarak saklanır; render eden taraf (frontend) escape etmeli.
-        User user = new User();
+        RegisterRequest user = new RegisterRequest();
         user.setUsername("<script>alert(1)</script>");
         user.setEmail("xss@example.com");
         user.setPassword("password123");

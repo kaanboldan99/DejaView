@@ -2,7 +2,7 @@
 
 Bu dosya, Claude ile yapılan çalışmanın durumunu takip etmek için tutuluyor. Amaç: "ne yapıldı, ne yapılacak, şu an aklımda ne var" sorusuna her seferinde baştan anlatmadan cevap verebilmek.
 
-Son güncelleme: 2026-09-03
+Son güncelleme: 2026-09-08
 
 ---
 
@@ -12,20 +12,32 @@ Son güncelleme: 2026-09-03
 
 Yapılan: local `main`'de o sırada duran, GitHub'daki yeni haliyle çakışan tek bir yeni commit vardı (bağlantı havuzu ayarları, bkz. madde 3) — `git pull --rebase origin main` ile onun üstüne taşındı, derlendi, push edildi. Şu an local ve `origin/main` birebir aynı, HEAD: `8eb0618`.
 
-Diskte artık `AuthControllerTest.java`, `GeminiServiceLiveTest.java`, `README.md`, `docker-compose.yml`, `application-prod.properties` gibi dosyaların hepsi var (feature branch'ten gelen içerik main'de).
+Diskte `AuthControllerTest.java`, `GeminiServiceLiveTest.java` ve `README.md` var.
+
+**DÜZELTME (2026-09-08):** Yukarıdaki cümlede `docker-compose.yml` ve `application-prod.properties`
+da sayılıyordu — bu YANLIŞ. `git branch --contains` ile doğrulandı: o iki dosyayı ekleyen commit'ler
+(`6273f31`, `9859a75`) yalnızca `origin/feature/user-profile-and-service-name` üzerinde; PR #2
+branch'in tamamını değil, o commit'lerden öncesini merge etmiş. Yani **PostgreSQL prod profili ve
+compose dosyası yazıldı ama main'e hiç girmedi.** Geri getirmek için o iki commit cherry-pick
+edilebilir (branch'teki `.DS_Store` dosyalarını almadan).
+
+(`application-dev.properties` 2026-09-08'de ayrıca ve sıfırdan yazıldı, o branch'tekiyle ilgisi yok.)
 
 **Ders çıkar:** Bir sonraki oturumda branch/commit durumu hakkında konuşmadan önce önce `git fetch && git log main..origin/main` ile gerçekten kontrol et, local geçmişe güvenme.
 
 ---
 
-## 2. GÜVENLİK DENETİMİ — TAMAMLANDI, AKSİYON BEKLİYOR
+## 2. GÜVENLİK DENETİMİ — TAMAMLANDI, KRİTİK BEŞLİ KAPATILDI (2026-09-08)
 
 Git geçmişinde sızmış sırlar arandı (pickaxe + blob tarama ile). En kritik bulgu:
 
 - **JWT imzalama anahtarı hardcoded**: `security/JwtUtil.java:20`
   `Keys.hmacShaKeyFor("mySuperSecretKeyForJwtGeneration123456789012345".getBytes())`
-  Commit `41c2f82`'de girmiş, hâlâ HEAD'de duruyor, **public GitHub repo'da yayında**.
-  → Bu anahtar YANMIŞ sayılmalı. Yapılacak: env variable'a taşı, yeni rastgele secret üret, eski token'lar geçersiz olacak (kullanıcılar yeniden login olmalı).
+  Commit `41c2f82`'de girmiş, **public GitHub repo'da yayında**.
+  → **DÜZELTİLDİ (2026-09-08):** anahtar `jwt.secret` / `JWT_SECRET` üzerinden geliyor, eksik veya
+  32 byte'tan kısaysa uygulama açılmıyor. `JwtUtilTest` eski sızmış anahtarın artık hiçbir token'ı
+  doğrulayamadığını kanıtlıyor. **Sunucuda yapılacak:** `JWT_SECRET`'i `openssl rand -base64 48`
+  ile üretip set et — eski token'lar geçersiz olacak, kullanıcılar yeniden login olmalı.
 
 - Geçmişi temizlemek istenirse `git-filter-repo` komutları verildi ama **henüz çalıştırılmadı** (repo'yu yeniden yazacağı için onay bekliyor).
 
@@ -47,13 +59,13 @@ Derlendi, commit'lendi, main'e push edildi (commit `80cfc86`).
 
 ---
 
-## 4. AKTİF GÖREV: Sadece arayüzde yapılan yetki kontrolleri (bu proje frontend'siz, backend trust-boundary denetimi olarak yorumlandı)
+## 4. TAMAMLANDI: Sadece arayüzde yapılan yetki kontrolleri (bu proje frontend'siz, backend trust-boundary denetimi olarak yorumlandı)
 
 İstenen: UI'da gizlenip backend'de aynı kontrolün olmadığı yerleri bul, sonra tek bir ortak yardımcı fonksiyonda topla.
 
 Bu repo'da frontend olmadığı için görev şuna dönüştü: **backend endpoint'lerinin client'tan gelen kimlik/rol bilgisine güvendiği, sunucu tarafında doğrulamadığı yerler.**
 
-### Bulunan somut açık (henüz düzeltilmedi):
+### Bulunan somut açık (2026-09-08'de DÜZELTİLDİ — aşağıdaki DURUM bölümüne bakın):
 
 **`AuthController.register` — Mass Assignment / Privilege Escalation**
 - Dosya: `controller/AuthController.java:42` — `register(@RequestBody User user)` ham JPA entity'sini client JSON'undan direkt bind ediyor.
@@ -63,12 +75,32 @@ Bu repo'da frontend olmadığı için görev şuna dönüştü: **backend endpoi
   1. `dev` profilinde (`SecurityConfig.java` — varsayılan aktif profil) `/api/auth/register` tamamen `permitAll`, JWT filtresi de yok. İstek gövdesine `"role":"ADMIN"` eklemek yeterli → kimlik doğrulama olmadan admin hesabı açılabilir.
   2. `prod` profilinde register `hasRole("ADMIN")` ile korunuyor (bunu sadece zaten admin olan biri çağırabilir) ama **admin bile olsa** register isteğine `"role":"ADMIN"` koyup yeni kullanıcıyı doğrudan admin yapabilir — bu normal, ama register body'sinde `id` de kabul ediliyor: var olan bir kullanıcı ID'si gönderilirse `userRepository.save()` INSERT değil UPDATE (merge) yapar → **var olan kullanıcının satırının üzerine yazılması ihtimali var** (henüz test yazıp doğrulanmadı).
 
-### Yapılacaklar (bir sonraki adım, sırayla):
-1. Dar bir `RegisterRequest` DTO'su oluştur (username, password, email, phoneNumber — `id` ve `role` YOK). `LoginRequest`/`UpdateProfileRequest` ile aynı desen.
-2. `AuthController.register` bu DTO'yu alsın, `UserService.createUser` içeride `role`'ü hep `Role.USER` set etsin, `id`'yi hiç görmesin (yeni `User()` objesi backend'de oluşturulsun, DTO'dan sadece alanlar kopyalansın).
-3. Admin'in başka birini ADMIN yapması gerekiyorsa (roadmap'te vardı), bunun için ayrı, açıkça `hasRole("ADMIN")` korumalı bir endpoint (`PUT /api/users/{id}/role` gibi) aç — register'ın içine gizleme.
-4. Bunu düzeltmeden önce, bu session'ın alışkanlığı olduğu gibi, önce **gerçek bir test ile açığı kanıtla** (self-promotion to admin, id-overwrite), sonra düzeltmeyi yap, sonra testi tekrar çalıştırıp kapandığını göster. `AuthControllerTest.java` artık main'de mevcut (bkz. madde 1, branch sorunu çözüldü) — testler oraya eklenebilir.
-5. Görev metninde istenen "tek bir ortak yardımcı fonksiyon": ownership/role kontrolünü tek yerde toplamak. Şu an `TicketController.deleteTicket` zaten `isAdmin` hesaplayıp `TicketService.deleteTicket(id, username, isAdmin)`'e taşıyor — ama bu mantık `TicketService` içinde satır satır. Bunu `AuthorizationHelper` (ya da `OwnershipGuard`) gibi tek bir sınıfa çıkarıp hem ticket silme hem gelecekteki benzer kontroller (örn. rol değiştirme endpoint'i) oradan geçsin.
+### DURUM: 1-2-4 yapıldı, 3 ve 5 açık (2026-09-08)
+
+Kritik beşlinin tamamı kapatıldı. Sıra: önce açığı kanıtlayan test yazıldı (üçü de kırmızı
+çıktı — rol ADMIN oldu, mevcut kullanıcı ezildi, BCrypt hash'i yanıtta döndü), sonra düzeltme,
+sonra testlerin yeşile döndüğü gösterildi. Tam paket: 165 test, 0 hata.
+
+| Açık | Düzeltme | Kanıt |
+|---|---|---|
+| JWT anahtarı sabit | `JwtUtil` anahtarı config'ten alıyor, yoksa fail-fast | `JwtUtilTest` (6 test) |
+| Mass assignment (`role`) | `RegisterRequest` DTO'su, rol her zaman sunucuda `USER` | `testRegister_GovdedeRolADMINGonderilse...` |
+| Mass assignment (`id`) | DTO'da `id` yok; `createUser` sıfırdan `User` kuruyor | `testRegister_GovdedeMevcutIdGonderilse...` |
+| Şifre hash'i yanıtta | Yanıt `UserProfileResponse`; ayrıca `User.password` `@JsonIgnore` | `testRegister_YanitSifreHashiniIcermez` |
+| `active=dev` sabit | Satır kaldırıldı; profil verilmezse korumalı zincir. `application-dev.properties` eklendi | Profilsiz açılış `JWT_SECRET` yok diye durdu (elle doğrulandı) |
+| `admin`/`admin` her profilde | Şifre `ADMIN_PASSWORD`'dan; boşsa hesap açılmıyor, şifre loglanmıyor | dev açılışında log temiz (elle doğrulandı) |
+
+H2 konsolu da prod zincirinden çıkarıldı (profilsiz deploy'da veritabanı konsolunu
+herkese açık bırakıyordu). README çalıştırma bölümü yeni akışa göre yazıldı.
+
+### Kalan yapılacaklar (bu görevden):
+1. **Rol değiştirme ucu açılmadı.** Admin'in başka birini ADMIN yapması için ayrı,
+   `hasRole("ADMIN")` korumalı bir endpoint (`PUT /api/users/{id}/role`) gerekiyor. Şu an
+   register rolü hep `USER` yaptığı için **yeni admin oluşturmanın uygulama içi yolu yok**;
+   ilk admin yalnızca `ADMIN_PASSWORD` ile açılıyor.
+2. **Ortak yetki yardımcısı yazılmadı.** Ownership/role kontrolü hâlâ `TicketService`
+   içinde satır satır. `AuthorizationHelper` / `OwnershipGuard` gibi tek bir sınıfa çıkarılıp
+   hem ticket silme hem de yukarıdaki rol değiştirme ucu oradan geçsin.
 
 ---
 

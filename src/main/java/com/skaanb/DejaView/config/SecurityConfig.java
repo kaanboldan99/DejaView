@@ -82,11 +82,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/auth/register").hasRole("ADMIN")
                         // AI'a yeniden özetletme, sadece ADMIN yetkisiyle tetiklenebilir.
                         .requestMatchers("/api/tickets/*/resummarize").hasRole("ADMIN")
+                        // H2 konsolu bilinçli olarak BURADA YOK: bu zincir profil
+                        // verilmediğinde de (default) devreye giriyor, yani üretimde
+                        // veritabanı konsolunu herkese açık bırakırdı. Konsol zaten
+                        // yalnızca dev profilinde etkin (application-dev.properties).
                         .requestMatchers(
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
-                                "/swagger-ui.html",
-                                "/h2-console/**"
+                                "/swagger-ui.html"
                         ).permitAll()
                         .anyRequest().authenticated()
                 )

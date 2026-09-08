@@ -1,5 +1,6 @@
 package com.skaanb.DejaView.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -15,6 +16,9 @@ public class User {
     @Column(nullable = false, unique = true)
     private String username;
 
+    // Entity bir yanıtta serialize edilirse hash'in dışarı sızmaması icin.
+    // Asil koruma yanit DTO'lari (UserProfileResponse); bu ikinci savunma hatti.
+    @JsonIgnore
     @Column(nullable = false)
     private String password;
 

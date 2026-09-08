@@ -5,26 +5,64 @@ import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.stereotype.Component;
 
+import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
 
+/**
+ * JWT üretimi ve doğrulaması.
+ *
+ * İmzalama anahtarı ARTIK KODDA SABİT DEĞİL. Önceden burada sabit bir string
+ * duruyordu ve public bir depoya girmişti; anahtarı gören herkes istediği
+ * kullanıcı adına — admin dahil — geçerli token üretebiliyordu. Anahtar artık
+ * {@code jwt.secret} (üretimde {@code JWT_SECRET} ortam değişkeni) üzerinden
+ * geliyor ve eksik/kısa olduğunda uygulama AÇILMIYOR: sessizce zayıf bir
+ * varsayılana düşmek, bu sınıfın düzeltmeye çalıştığı hatanın ta kendisi.
+ */
 @Component
 public class JwtUtil {
 
     private static final Logger logger = LoggerFactory.getLogger(JwtUtil.class);
 
-    private static final long EXPIRATION_TIME = 1000 * 60 * 60 * 24; // 24 saat
-    private static final Key key = Keys.hmacShaKeyFor("mySuperSecretKeyForJwtGeneration123456789012345".getBytes()); // en az 256-bit (32 byte)
+    /** HS256 en az 256 bit (32 byte) anahtar gerektirir. */
+    private static final int MIN_SECRET_BYTES = 32;
 
-    public static String generateToken(User user) {
+    private final Key key;
+    private final long expirationMs;
+
+    public JwtUtil(@Value("${jwt.secret:}") String secret,
+                   @Value("${jwt.expiration-ms:86400000}") long expirationMs) {
+
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "JWT imzalama anahtarı tanımlı değil. JWT_SECRET ortam değişkenini "
+                    + "(veya jwt.secret ayarını) en az " + MIN_SECRET_BYTES + " byte'lık rastgele "
+                    + "bir değerle set edin. Örnek: openssl rand -base64 48");
+        }
+
+        byte[] secretBytes = secret.getBytes(StandardCharsets.UTF_8);
+        if (secretBytes.length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "JWT imzalama anahtarı çok kısa (" + secretBytes.length + " byte). "
+                    + "JWT_SECRET en az " + MIN_SECRET_BYTES + " byte olmalı. "
+                    + "Örnek: openssl rand -base64 48");
+        }
+
+        this.key = Keys.hmacShaKeyFor(secretBytes);
+        this.expirationMs = expirationMs;
+    }
+
+    public String generateToken(User user) {
+        Date now = new Date();
         return Jwts.builder()
                 .setSubject(user.getUsername())
-                .setIssuedAt(new Date(System.currentTimeMillis()))
-                .setExpiration(new Date(System.currentTimeMillis() + EXPIRATION_TIME))
-                .signWith(key,SignatureAlgorithm.HS256)
+                .setIssuedAt(now)
+                .setExpiration(new Date(now.getTime() + expirationMs))
+                .signWith(key, SignatureAlgorithm.HS256)
                 .compact();
     }
 
