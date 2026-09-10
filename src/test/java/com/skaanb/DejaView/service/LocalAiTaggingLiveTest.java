@@ -25,6 +25,13 @@ import static org.junit.jupiter.api.Assertions.*;
 @EnabledIfEnvironmentVariable(named = "LOCAL_AI", matches = ".+")
 class LocalAiTaggingLiveTest {
 
+    // Sınırlar application.properties'teki dejaview.ai.* değerleriyle aynı; test
+    // konfigürasyonu okumadığı (Spring context'i açılmıyor) için burada tekrarlanıyor.
+    private static final int MIN_TAGS = 10;
+    private static final int MAX_TAGS = 14;
+    private static final int MIN_SOLUTIONS = 3;
+    private static final int MAX_SOLUTIONS = 5;
+
     // Yerel model bulut API'lerinden yavaş; timeout'u bolca veriyoruz (bkz.
     // application-local-ai.properties'teki openai.api.timeout-seconds).
     private final OpenAiService service = new OpenAiService(
@@ -32,7 +39,10 @@ class LocalAiTaggingLiveTest {
             "http://localhost:1234/v1/chat/completions",
             System.getenv().getOrDefault("LOCAL_AI_MODEL", "qwen/qwen3-8b"),
             180,
-            5);
+            MIN_TAGS,
+            MAX_TAGS,
+            MIN_SOLUTIONS,
+            MAX_SOLUTIONS);
 
     @Test
     void testAnalyze_YerelModeldenSemayaUygunEtiketVeOzetDoner() {
@@ -42,12 +52,24 @@ class LocalAiTaggingLiveTest {
 
         assertNotNull(analysis.getDescription());
         assertFalse(analysis.getDescription().isBlank());
-        assertNotNull(analysis.getSolution());
-        assertFalse(analysis.getSolution().isBlank());
+        assertNotNull(analysis.getRootCause());
+        assertFalse(analysis.getRootCause().isBlank(), "Kök neden alanı doldurulmalı");
+
+        List<String> solutions = analysis.getSolutions();
+        assertTrue(solutions.size() >= MIN_SOLUTIONS,
+                "En az " + MIN_SOLUTIONS + " çözüm önerisi beklenir, gelen: " + solutions);
+        assertTrue(solutions.size() <= MAX_SOLUTIONS,
+                "max-solutions sınırı aşılmamalı, gelen: " + solutions);
+        for (String solution : solutions) {
+            assertFalse(solution.isBlank(), "Boş çözüm önerisi olmamalı");
+        }
 
         List<String> tags = analysis.getTags();
-        assertFalse(tags.isEmpty(), "Yapısal çıktı kullanıldığı için etiket listesi boş gelmemeli");
-        assertTrue(tags.size() <= 5, "max-tags sınırı aşılmamalı, gelen: " + tags);
+        // Alt sınır sözleşmenin kendisi: şemadaki minItems tutmazsa OpenAiService eksik
+        // kalan etiketler için ikinci bir çağrı yapıyor (bkz. topUpTags), yani buraya
+        // gelen listenin hedefi tutturmuş olması bekleniyor.
+        assertTrue(tags.size() >= MIN_TAGS, "En az " + MIN_TAGS + " etiket beklenir, gelen: " + tags);
+        assertTrue(tags.size() <= MAX_TAGS, "max-tags sınırı aşılmamalı, gelen: " + tags);
 
         // Etiketlerin İÇERİĞİ üzerine assertion yok: model çıktısı deterministik değil ve
         // testi belirli kelimelere bağlamak onu kırılgan yapar. Doğrulanan şey sözleşme —
@@ -58,7 +80,9 @@ class LocalAiTaggingLiveTest {
             assertEquals(tag.trim(), tag, "Etiketlerde baştaki/sondaki boşluk temizlenmeli");
         }
 
-        System.out.println("Yerel model etiketleri: " + tags);
+        System.out.println("Yerel model etiketleri (" + tags.size() + "): " + tags);
         System.out.println("Özet: " + analysis.getDescription());
+        System.out.println("Kök neden: " + analysis.getRootCause());
+        System.out.println("Çözümler: " + solutions);
     }
 }

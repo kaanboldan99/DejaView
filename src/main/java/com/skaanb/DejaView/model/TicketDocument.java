@@ -11,64 +11,115 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Elasticsearch'teki {@code dejaview_tickets} indeksinde duran kayıt dokümanı.
+ *
+ * Nasıl çalışır: uygulamanın kullanıcıya gösterdiği kayıt akışının BİRİNCİL
+ * deposu burasıdır — arama, tekrar sayacı ve AI analiz sonuçları bu dokümanda
+ * tutulur. Doküman kimliği rastgele değil, normalize edilmiş başlıktan
+ * deterministik olarak türetilir; böylece "aynı başlık = aynı kayıt" kuralı
+ * sorguya değil dokümanın kimliğine bağlanır
+ * (bkz. {@link com.skaanb.DejaView.service.TicketService}).
+ *
+ * Alan tipleri bilinçli seçildi: {@code Keyword} alanlar (başlık, servis,
+ * etiketler) birebir eşleşmeyle filtrelenir, {@code Text} alanlar (hata mesajı,
+ * yığın izi, AI metinleri) tam metin aramasına girer.
+ */
 @Document(indexName = "dejaview_tickets")
 public class TicketDocument {
 
+    /** Doküman kimliği; normalize edilmiş başlığın SHA-256 özeti. */
     @Id
     private String id;
 
-    // Elasticsearch'in optimistic concurrency control'ünü (seq_no/primary_term) kullanır.
-    // İki thread aynı ticket'ı aynı anda güncellemeye çalışırsa, versiyonu eski olan save()
-    // OptimisticLockingFailureException fırlatır (bkz. TicketMutationExecutor) — bu sayede
-    // biri diğerinin yazdığını sessizce ezmez (lost update önlenir).
+    /**
+     * Elasticsearch'in iyimser eşzamanlılık denetimi (seq_no/primary_term) için versiyon.
+     *
+     * Nasıl çalışır: iki thread aynı kaydı aynı anda güncellemeye çalışırsa,
+     * versiyonu eski olan {@code save()} çağrısı {@code OptimisticLockingFailureException}
+     * fırlatır (bkz. {@link com.skaanb.DejaView.service.TicketMutationExecutor}) —
+     * bu sayede biri diğerinin yazdığını sessizce ezmez, yani "lost update" oluşmaz.
+     */
     @Version
     private Long version;
 
+    /** Kaydın görünen başlığı; ilk oluşturmadan sonra değiştirilmez. */
     @Field(type = FieldType.Keyword)
     private String title;
 
-    // title'ın trim+lowercase edilmiş hali; aynı başlıkla açılan kayıtları
-    // büyük/küçük harf duyarsız şekilde bulmak için (bkz. TicketRepository.findByTitleNormalized)
+    /**
+     * Başlığın kırpılmış ve küçük harfe çevrilmiş hâli.
+     *
+     * Nasıl çalışır: aynı başlıkla açılan kayıtları büyük/küçük harf duyarsız
+     * bulmak için kullanılır
+     * (bkz. {@link com.skaanb.DejaView.repository.TicketRepository#findByTitleNormalized}).
+     */
     @Field(type = FieldType.Keyword)
     private String titleNormalized;
 
+    /** Hatanın metni; aramada taranan ana alan. */
     @Field(type = FieldType.Text)
     private String errorMessage;
 
+    /** Hatanın yığın izi (stack trace). */
     @Field(type = FieldType.Text)
     private String stackTrace;
 
+    /** Hatanın geldiği servis adı; filtre listesinde birebir eşleşmeyle kullanılır. */
     @Field(type = FieldType.Keyword)
     private String serviceName;
 
+    /** Kaydın ilk oluşturulma zamanı; sonraki görülmelerde değişmez. */
     @Field(type = FieldType.Date)
     private Instant createdAt;
 
+    /** Aynı hatanın en son ne zaman görüldüğü; her yeni görülmede güncellenir. */
     @Field(type = FieldType.Date)
     private Instant lastOccurrenceAt;
 
+    /** AI'ın ürettiği ayrıntılı açıklama: "ne oldu" sorusunun cevabı. */
     @Field(type = FieldType.Text)
     private String aiGeneratedDescription;
 
+    /**
+     * AI'ın öne sürdüğü en olası kök neden: "neden oldu" sorusunun cevabı.
+     *
+     * Nasıl çalışır: {@link #aiGeneratedDescription} ile ayrı alanlarda tutulur
+     * çünkü arayüzde ayrı bölümler olarak gösteriliyor ve biri gelmezse diğeri
+     * yine de gösterilebiliyor.
+     */
+    @Field(type = FieldType.Text)
+    private String aiRootCause;
+
+    /** Etiketler; küçük harfe normalize edilmiş, birebir eşleşmeyle filtrelenen Keyword dizisi. */
     @Field(type = FieldType.Keyword)
     private List<String> aiTags;
 
-    // Aynı başlıklı hatanın birden fazla çözümü olabilir; her yeni AI analizi
-    // sonucu buraya eklenir (üzerine yazılmaz).
+    /**
+     * Çözüm önerileri.
+     *
+     * Nasıl çalışır: aynı başlıklı hatanın birden fazla çözümü olabileceği için
+     * her yeni analiz sonucu bu listeye EKLENİR, üzerine yazılmaz. Tek istisna
+     * kullanıcının açık "yeniden üret" isteğidir
+     * (bkz. {@link com.skaanb.DejaView.service.TicketAnalysisListener}).
+     */
     @Field(type = FieldType.Text)
     private List<String> solutions = new ArrayList<>();
 
+    /** Kaydı ilk açan kullanıcı adı; silme yetkisi kontrolünde kullanılır. */
     @Field(type = FieldType.Keyword)
     private String createdBy;
 
-    // Bu başlıkla kaç kez ticket açılmaya çalışıldığı (duplicate'ler dahil)
+    /** Bu başlıkla kaç kez kayıt açılmaya çalışıldığı (tekrarlar dâhil). */
     @Field(type = FieldType.Integer)
     private int occurrenceCount = 1;
 
+    /** Kaydın AI analiz sürecindeki durumu. */
     @Field(type = FieldType.Keyword)
     private TicketStatus status;
 
-    // --- GETTER & SETTER METOTLARI ---
+    /* --- Erişimciler: alanların anlamı yukarıdaki tanımlarda belgelendi.  --- */
+    /* --- Tek istisna mergeAiTags; o kendi davranışıyla ayrıca belgelendi. --- */
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
@@ -100,15 +151,28 @@ public class TicketDocument {
     public String getAiGeneratedDescription() { return aiGeneratedDescription; }
     public void setAiGeneratedDescription(String aiGeneratedDescription) { this.aiGeneratedDescription = aiGeneratedDescription; }
 
+    public String getAiRootCause() { return aiRootCause; }
+    public void setAiRootCause(String aiRootCause) { this.aiRootCause = aiRootCause; }
+
     public List<String> getAiTags() { return aiTags; }
     public void setAiTags(List<String> aiTags) { this.aiTags = aiTags; }
 
-    // Etiketler üzerine YAZILMAZ, birleştirilir: aynı ticket hem kullanıcının elle verdiği
-    // etiketleri hem de arka planda çalışan AI analizinin ürettiklerini alabilir ve ikisi de
-    // korunmalı. LinkedHashSet tekrarları eler ama ekleme sırasını bozmaz, böylece önce
-    // gelen (genelde kullanıcının kendi verdiği) etiket listenin başında kalır.
-    // Bu mantık TicketService ve TicketAnalysisListener'da ayrı ayrı kopyalanmak yerine
-    // burada duruyor — etiketlerin nasıl birleşeceğini bilmesi gereken dokümanın kendisi.
+    /**
+     * Yeni etiketleri mevcutların ÜZERİNE yazmadan birleştirir.
+     *
+     * Nasıl çalışır: aynı kayıt hem kullanıcının elle verdiği etiketleri hem de
+     * arka planda çalışan AI analizinin ürettiklerini alabilir ve ikisi de
+     * korunmalıdır. {@link LinkedHashSet} tekrarları eler ama ekleme sırasını
+     * bozmaz, böylece önce gelen (genelde kullanıcının kendi verdiği) etiket
+     * listenin başında kalır.
+     *
+     * Bu mantık {@code TicketService} ve {@code TicketAnalysisListener} içinde
+     * ayrı ayrı kopyalanmak yerine burada duruyor: etiketlerin nasıl
+     * birleşeceğini bilmesi gereken, dokümanın kendisi.
+     *
+     * @param newTags eklenecek etiketler; {@code null} verilebilir, o durumda
+     *                mevcut etiketler olduğu gibi kalır
+     */
     public void mergeAiTags(List<String> newTags) {
         Set<String> merged = new LinkedHashSet<>();
         if (this.aiTags != null) {

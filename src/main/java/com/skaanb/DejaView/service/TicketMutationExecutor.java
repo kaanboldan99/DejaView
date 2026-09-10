@@ -10,38 +10,61 @@ import org.springframework.stereotype.Component;
 
 import java.util.function.Consumer;
 
-// Tek Sorumluluk: bir TicketDocument üzerinde "oku -> değiştir -> kaydet" işlemini
-// concurrent güncellemelere karşı güvenli şekilde yapmak. RabbitMQ dinleyicisi birden
-// fazla thread ile çalıştığında (bkz. application.properties: listener.simple.concurrency)
-// veya bir kullanıcı ticket oluştururken aynı anda başka bir occurrence/AI sonucu aynı
-// dokümana yazmaya çalışırsa, TicketDocument@Version sayesinde eski versiyonla yapılan
-// save() çakışma fırlatır; bu sınıf böyle bir çakışmada dokümanı yeniden okuyup
-// mutator'ı tekrar uygulayarak "lost update" oluşmasını engeller.
-//
-// ÖNEMLİ: Spring Data Elasticsearch'ün @Version desteği (external versioning) JPA'nın
-// aksine version'ı otomatik ARTIRMAZ — save() her zaman entity üzerindeki mevcut version
-// değerini "bu değere eşit veya büyükse reddet" olarak gönderir. Bu yüzden her kayıttan
-// önce version'ı burada elle artırıyoruz; aksi halde ikinci save() her zaman
-// VersionConflictException ile başarısız olur (version, okunanla aynı kalır).
+/**
+ * Bir kayıt üzerinde "oku -> değiştir -> kaydet" işlemini eşzamanlı
+ * güncellemelere karşı güvenli şekilde yürüten bileşen.
+ *
+ * Nasıl çalışır: Tek Sorumluluk ilkesi gereği bu sınıfın tek işi çakışma
+ * yönetimidir. RabbitMQ dinleyicisi birden fazla thread ile çalıştığında
+ * (bkz. {@code spring.rabbitmq.listener.simple.concurrency}) ya da bir
+ * kullanıcı kayıt açarken aynı anda başka bir görülme/AI sonucu aynı dokümana
+ * yazmaya çalıştığında, {@link TicketDocument} üzerindeki versiyon alanı
+ * sayesinde eski versiyonla yapılan {@code save()} çakışma fırlatır. Bu sınıf
+ * böyle bir çakışmada dokümanı YENİDEN OKUYUP değişikliği tekrar uygular,
+ * yani "lost update" oluşmasını engeller.
+ *
+ * ÖNEMLİ: Spring Data Elasticsearch'ün versiyon desteği (external versioning)
+ * JPA'nın aksine versiyonu otomatik ARTIRMAZ — {@code save()} her zaman nesne
+ * üzerindeki mevcut versiyon değerini "bu değere eşit veya büyükse reddet"
+ * olarak gönderir. Bu yüzden her kayıttan önce versiyon burada elle artırılır;
+ * aksi halde ikinci {@code save()} her zaman çakışmayla başarısız olurdu.
+ */
 @Component
 public class TicketMutationExecutor {
 
     private static final Logger logger = LoggerFactory.getLogger(TicketMutationExecutor.class);
+
+    /** Çakışma hâlinde kaç kez yeniden denenecek. */
     private static final int MAX_ATTEMPTS = 5;
 
+    /** Kaydı okuyup yazan depo. */
     private final TicketRepository ticketRepository;
 
+    /**
+     * @param ticketRepository Elasticsearch kayıt deposu
+     */
     public TicketMutationExecutor(TicketRepository ticketRepository) {
         this.ticketRepository = ticketRepository;
     }
 
     /**
-     * id'si verilen ticket'ı okur, mutator ile değiştirir ve kaydeder. Concurrent bir
-     * güncelleme çakışması olursa (VersionConflictException / OptimisticLockingFailureException)
-     * dokümanı en güncel haliyle yeniden okuyup mutator'ı tekrar uygular.
+     * Kaydı okur, verilen değişikliği uygular ve kaydeder; çakışmada tekrar dener.
      *
-     * @throws IllegalArgumentException ticket bulunamazsa
-     * @throws IllegalStateException MAX_ATTEMPTS denemede de çakışma çözülemezse
+     * Nasıl çalışır: her denemede doküman EN GÜNCEL hâliyle yeniden okunur,
+     * {@code mutator} ona uygulanır, versiyon bir artırılır ve kaydedilir.
+     * Çakışma olursa döngü baştan başlar — yani değişiklik, araya giren diğer
+     * yazmanın SONUCU üzerine uygulanır, onu ezmez.
+     *
+     * Bu yüzden {@code mutator} yan etkisiz ve tekrar çalıştırılabilir olmalıdır:
+     * birden fazla kez çağrılabilir. Örneğin "sayacı bir artır" güvenlidir,
+     * ama dışarıya e-posta göndermek değildir.
+     *
+     * @param ticketId değiştirilecek kaydın doküman kimliği
+     * @param mutator  doküman üzerinde yapılacak değişiklik; çakışma hâlinde
+     *                 birden fazla kez çağrılabilir
+     * @return kaydedilmiş, güncel doküman
+     * @throws IllegalArgumentException kayıt bulunamazsa
+     * @throws IllegalStateException    {@value #MAX_ATTEMPTS} denemede de çakışma çözülemezse
      */
     public TicketDocument mutate(String ticketId, Consumer<TicketDocument> mutator) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -50,9 +73,11 @@ public class TicketMutationExecutor {
 
             mutator.accept(ticket);
 
-            // external versioning: ES sadece verilen version, mevcut saklanan versiyondan
-            // KESİN OLARAK büyükse yazmayı kabul ediyor. findById ile okunan versiyon
-            // mevcut saklanan değerin ta kendisi olduğu için elle artırmak şart.
+            /*
+             * External versioning: Elasticsearch yalnızca verilen versiyon, saklanan
+             * versiyondan KESİN OLARAK büyükse yazmayı kabul ediyor. findById ile
+             * okunan versiyon saklanan değerin ta kendisi olduğu için elle artırmak şart.
+             */
             Long currentVersion = ticket.getVersion();
             ticket.setVersion(currentVersion == null ? 1L : currentVersion + 1);
 

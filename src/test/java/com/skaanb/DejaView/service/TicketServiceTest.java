@@ -230,7 +230,9 @@ public class TicketServiceTest {
 
         // Then
         assertEquals(TicketStatus.PENDING, response.getStatus());
-        verify(ticketAnalysisProducer).enqueueAnalysis("ticket-1", "Orijinal hata mesajı");
+        // regenerate=true: kullanıcının açık isteği olduğu için sonuç mevcut çözümlere
+        // eklenmek yerine onların yerine geçmeli (bkz. TicketAnalysisListener).
+        verify(ticketAnalysisProducer).enqueueAnalysis("ticket-1", "Orijinal hata mesajı", true);
     }
 
     @SuppressWarnings("unchecked")

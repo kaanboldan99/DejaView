@@ -11,9 +11,13 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
 /**
- * İlk admin hesabını oluşturur.
+ * Uygulama açılışında ilk admin hesabını oluşturur.
  *
- * Şifre ARTIK KODDA SABİT DEĞİL. Önceden her profilde — üretim dahil —
+ * Nasıl çalışır: {@link CommandLineRunner} uyguladığı için Spring bağlamı
+ * hazır olduğunda {@link #run(String...)} bir kez çalıştırılır. Hesap zaten
+ * varsa hiçbir şey yapılmaz, yani her açılışta güvenle çalışır.
+ *
+ * Şifre ARTIK KODDA SABİT DEĞİL. Önceden her profilde — üretim dâhil —
  * {@code admin}/{@code admin} hesabı açılıyor ve şifre INFO seviyesinde log
  * dosyasına düz metin yazılıyordu. Artık şifre {@code dejaview.admin.password}
  * (üretimde {@code ADMIN_PASSWORD} ortam değişkeni) üzerinden geliyor; ayar
@@ -28,13 +32,33 @@ public class DataInitializer implements CommandLineRunner {
 
     private static final Logger logger = LoggerFactory.getLogger(DataInitializer.class);
 
+    /** Kullanıcı arama ve kaydetme için depo. */
     private final UserRepository userRepository;
+
+    /** Şifreyi BCrypt ile hash'leyen kodlayıcı. */
     private final PasswordEncoder passwordEncoder;
 
+    /** Oluşturulacak admin hesabının kullanıcı adı; varsayılan {@code admin}. */
     private final String adminUsername;
+
+    /** Oluşturulacak admin hesabının e-postası. */
     private final String adminEmail;
+
+    /** Admin şifresi; BOŞ bırakılırsa hesap hiç oluşturulmaz. */
     private final String adminPassword;
 
+    /**
+     * Bağımlılıkları ve admin hesabı ayarlarını alır.
+     *
+     * Nasıl çalışır: ayarların hepsinin varsayılanı var, ama şifrenin
+     * varsayılanı bilinçli olarak BOŞ — tanımlanmadığında hesap oluşturulmaz.
+     *
+     * @param userRepository  kullanıcı deposu
+     * @param passwordEncoder şifre hash'leyici
+     * @param adminUsername   {@code dejaview.admin.username}; varsayılan {@code admin}
+     * @param adminEmail      {@code dejaview.admin.email}; varsayılan {@code admin@dejaview.com}
+     * @param adminPassword   {@code dejaview.admin.password}; varsayılanı boş
+     */
     public DataInitializer(UserRepository userRepository,
                            PasswordEncoder passwordEncoder,
                            @Value("${dejaview.admin.username:admin}") String adminUsername,
@@ -47,6 +71,17 @@ public class DataInitializer implements CommandLineRunner {
         this.adminPassword = adminPassword;
     }
 
+    /**
+     * Admin hesabını gerekiyorsa oluşturur.
+     *
+     * Nasıl çalışır: üç yoldan biri işler — (1) hesap zaten varsa bilgi
+     * loglanıp çıkılır; (2) şifre tanımlı değilse UYARI loglanıp hesap
+     * oluşturulmaz (uygulama yine de açılır, sadece admin girişi olmaz);
+     * (3) ikisi de değilse hesap {@link Role#ADMIN} yetkisiyle, şifresi
+     * hash'lenerek kaydedilir. Şifre hiçbir yolda loglanmaz.
+     *
+     * @param args komut satırı argümanları; bu uygulama kullanmıyor
+     */
     @Override
     public void run(String... args) {
         if (userRepository.existsByUsername(adminUsername)) {
@@ -69,7 +104,7 @@ public class DataInitializer implements CommandLineRunner {
 
         userRepository.save(adminUser);
 
-        // Şifre bilinçli olarak loglanmıyor.
+        /* Şifre bilinçli olarak loglanmıyor. */
         logger.info("DejaView: başlangıç admin hesabı oluşturuldu. username={}, email={}",
                 adminUsername, adminEmail);
     }

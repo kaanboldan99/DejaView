@@ -19,6 +19,28 @@ Ticket oluşturma akışı: istek gelir → kayıt `PENDING` durumuyla anında d
 RabbitMQ üzerinden arka planda yerel modele gönderilir → sonuç `solutions` listesine
 eklenir (üzerine yazılmaz, birikir) → durum `COMPLETED`/`FAILED` olur.
 
+### AI arızasında analiz isteği kaybolmaz
+
+AI tarafında bir sorun olduğunda (LM Studio kapalı, timeout, kota dolu, bozuk yanıt)
+analiz isteği kuyruktan **düşürülmüyor**, bekletilip yeniden deneniyor:
+
+1. Hata alınır → mesaj `dejaview.ai.retry.delays-seconds` listesindeki süre kadar
+   bekleyen bir kuyruğa konur (varsayılan 1 dk → 5 dk → 30 dk), ticket `PENDING` kalır.
+   Bekleme **RabbitMQ'da**, TTL'li ve tüketicisi olmayan kuyruklarda gerçekleşiyor: bekleyen
+   kayıt bir consumer thread'ini tutmuyor, sıradaki ticket'lar işlenmeye devam ediyor ve
+   uygulama yeniden başlasa bile bekleme sürüyor.
+2. TTL dolunca mesaj dead-letter yoluyla analiz kuyruğuna geri düşer ve yeniden denenir.
+   Deneme sayısı mesajın içinde (`attempt`) taşınır.
+3. Tüm denemeler tükenirse mesaj **silinmez**, `dejaview.tickets.analysis.parked.queue`
+   kuyruğunda park eder (park sebebi `x-park-reason` başlığında) ve ticket `FAILED` olur.
+   Arıza giderildikten sonra `POST /api/tickets/analysis/parked/replay` (ADMIN) ile
+   bekleyenlerin tamamı tek çağrıda yeniden kuyruğa alınır.
+
+Aynı emniyet, AI dışı beklenmedik hatalar için de var: listener'dan sızan bir hata
+Spring'in retry denemelerini tükettiğinde mesaj `default-requeue-rejected=false` yüzünden
+normalde silinirdi; bir `MessageRecoverer` (bkz. `RabbitConfig`) onu da park kuyruğuna
+yönlendiriyor.
+
 Aynı başlıkla (büyük/küçük harf duyarsız) tekrar gelen kayıtlar yeni bir doküman
 açmaz; başlıktan türetilen deterministik bir ID (SHA-256) sayesinde aynı kayda
 yönlenir, `occurrenceCount` artar, tag'ler birleştirilir. Concurrent güncellemeler
@@ -64,6 +86,7 @@ docker run -d --name dejaview-rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-ma
 | `RABBITMQ_PORT` | `5672` | |
 | `RABBITMQ_USERNAME` | `guest` | |
 | `RABBITMQ_PASSWORD` | `guest` | |
+| `AI_RETRY_DELAYS` | `60,300,1800` | AI hatasında mesajın kaç saniye bekletilip yeniden deneneceği. Eleman sayısı = deneme hakkı; hepsi tükenince mesaj park kuyruğuna alınır (silinmez). |
 
 ## Çalıştırma
 
@@ -120,6 +143,8 @@ H2 konsolu bu profilde kapalıdır.
 | `DELETE /api/tickets/{id}` | Ticket sil (sahibi veya ADMIN) |
 | `POST /api/tickets/{id}/resummarize` | AI analizini yeniden tetikle (ADMIN) |
 | `GET /api/tickets/search?q=...` | Elasticsearch tabanlı arama |
+| `GET /api/tickets/analysis/parked` | Park kuyruğunda bekleyen analiz sayısı (ADMIN) |
+| `POST /api/tickets/analysis/parked/replay` | Park edilmiş analizleri yeniden kuyruğa al (ADMIN) |
 
 ## Test
 

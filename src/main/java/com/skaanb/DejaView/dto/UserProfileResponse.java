@@ -6,20 +6,47 @@ import com.skaanb.DejaView.model.User;
 import java.time.LocalDateTime;
 
 /**
- * Kullanıcının kendi profil bilgisi.
+ * Kullanıcının kendi profil bilgisinin dışarı dönen hâli.
  *
- * Şifre bu DTO'da bilinçli olarak yok: User entity'sini doğrudan döndürmek
- * hash'lenmiş şifreyi de istemciye gönderir.
+ * Nasıl çalışır: {@link User} varlığından {@link #from(User)} ile üretilir ve
+ * yalnızca gösterilmesi güvenli alanları taşır. Şifre bu DTO'da bilinçli olarak
+ * YOK: varlığı doğrudan döndürmek BCrypt hash'ini istemciye ve erişim
+ * loglarına sızdırıyordu.
+ *
+ * Hem profil ucu hem de kayıt ucu bu DTO ile yanıt verir; ikisinin de aynı
+ * gövdeyi üretmesi istemci tarafında tek bir modelle çalışmayı sağlıyor.
  */
 public class UserProfileResponse {
 
+    /** Kullanıcının veritabanı kimliği. */
     private Long id;
+
+    /** Kullanıcı adı; JWT'nin subject alanı. */
     private String username;
+
+    /** E-posta adresi. */
     private String email;
+
+    /** Telefon numarası; tanımlı değilse {@code null}. */
     private String phoneNumber;
+
+    /** Yetki seviyesi. */
     private Role role;
+
+    /** Hesabın oluşturulma zamanı. */
     private LocalDateTime createdAt;
 
+    /**
+     * Varlıktan yanıt DTO'su üretir.
+     *
+     * Nasıl çalışır: alanlar tek tek kopyalanır; kopyalanmayan her alan
+     * (özellikle şifre hash'i) tanım gereği dışarı çıkmaz. Yeni bir alan
+     * eklendiğinde buraya da eklenmediği sürece yanıtta görünmez — bu
+     * "unutulduğunda sızdırmayan" varsayılan bilinçli.
+     *
+     * @param user kaynak kullanıcı varlığı; {@code null} olmamalı
+     * @return yalnızca gösterilmesi güvenli alanları taşıyan DTO
+     */
     public static UserProfileResponse from(User user) {
         UserProfileResponse dto = new UserProfileResponse();
         dto.id = user.getId();
@@ -30,6 +57,9 @@ public class UserProfileResponse {
         dto.createdAt = user.getCreatedAt();
         return dto;
     }
+
+    /* --- Erişimciler: alanların anlamı yukarıdaki tanımlarda belgelendi, --- */
+    /* --- bu metotların okuma/yazma dışında bir davranışı yoktur.         --- */
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }

@@ -18,35 +18,59 @@ import org.springframework.web.bind.annotation.*;
 import java.util.Map;
 import java.util.Optional;
 
+/**
+ * Kimlik uçları: kullanıcı kaydı ve giriş.
+ *
+ * Nasıl çalışır: {@code /api/auth} altında iki uç sunar. Kayıt ucu korumalı
+ * ortamda ADMIN'e kısıtlıdır, giriş ucu herkese açıktır
+ * (bkz. {@link com.skaanb.DejaView.config.SecurityConfig}).
+ *
+ * İki uç da varlık nesnesini DOĞRUDAN döndürmez: kayıt
+ * {@link UserProfileResponse} ile, giriş yalnızca token taşıyan bir eşleme ile
+ * yanıt verir. Varlığın doğrudan döndürülmesi BCrypt şifre hash'ini istemciye
+ * ve erişim loglarına sızdırıyordu.
+ */
 @RestController
 @RequestMapping("/api/auth")
 public class AuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);
 
+    /** Giriş sırasında kullanıcıyı e-postadan bulmak için depo. */
     @Autowired
     private UserRepository userRepository;
 
+    /** Başarılı girişte token üreten yardımcı. */
     @Autowired
     private JwtUtil jwtUtil;
 
+    /** Girilen şifreyi saklanan hash ile karşılaştıran kodlayıcı. */
     @Autowired
     private PasswordEncoder passwordEncoder;
 
-
+    /** Kullanıcı oluşturma kurallarını yürüten servis. */
     private final UserService userService;
 
+    /**
+     * @param userService kullanıcı oluşturma kurallarını yürüten servis
+     */
     public AuthController(UserService userService) {
         this.userService = userService;
     }
 
     /**
-     * Yeni kullanıcı kaydı.
+     * Yeni kullanıcı kaydeder.
      *
-     * Gövde ham {@code User} entity'si değil, dar bir DTO ile alınıyor: istemci
-     * ne rolünü ne de id'sini belirleyebilir. Yanıt da entity değil
-     * {@link UserProfileResponse} — entity'nin doğrudan döndürülmesi BCrypt
-     * şifre hash'ini istemciye ve erişim loglarına sızdırıyordu.
+     * Nasıl çalışır: gövde ham {@code User} varlığı değil, dar bir DTO ile
+     * alınır; istemci ne rolünü ne de kimliğini belirleyebilir. Oluşturma
+     * kuralları (benzersizlik kontrolü, şifre hash'leme, rol atama) servise
+     * bırakılır. Kural ihlallerinde servis bir çalışma zamanı hatası fırlatır
+     * ve burada 400 Bad Request'e çevrilir — kullanıcı hatası olduğu için 500
+     * değil.
+     *
+     * @param request kayıt gövdesi: kullanıcı adı, şifre, e-posta, telefon
+     * @return 200 ve oluşturulan profilin güvenli hâli; kural ihlalinde 400 ve
+     *         hata mesajı
      */
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody RegisterRequest request) {
@@ -60,6 +84,21 @@ public class AuthController {
         }
     }
 
+    /**
+     * Kullanıcıyı doğrular ve JWT üretir.
+     *
+     * Nasıl çalışır: kullanıcı e-postadan bulunur, şifre BCrypt ile
+     * karşılaştırılır, başarılıysa token üretilip {@code {"token": "..."}}
+     * olarak döner.
+     *
+     * İki başarısızlık yolu (kayıtlı olmayan e-posta / hatalı şifre) istemciye
+     * AYNI mesajla döner. Bu bilinçli: farklı mesajlar, hangi e-postaların
+     * sistemde kayıtlı olduğunu dışarıdan tespit etmeye yarardı. Ayrım yalnızca
+     * sunucu logunda görünür.
+     *
+     * @param request giriş gövdesi: e-posta ve düz metin şifre
+     * @return 200 ve token; kimlik doğrulanamazsa 401 ve genel hata mesajı
+     */
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest request) {
         String email = request.getEmail();

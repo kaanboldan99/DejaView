@@ -23,6 +23,20 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
+/**
+ * Kayıt iş kuralları: oluşturma, tekilleştirme, arama, silme ve yeniden analiz.
+ *
+ * Nasıl çalışır: sınıfın taşıdığı en önemli karar TEKİLLEŞTİRMEDİR — aynı
+ * başlıkla ikinci kez kayıt açılmaz, mevcut kayda "yeni bir görülme" olarak
+ * işlenir. Bu kural sorgu bazlı aramaya değil, dokümanın KİMLİĞİNE bağlanmıştır:
+ * doküman kimliği normalize edilmiş başlığın SHA-256 özetidir
+ * (bkz. {@link #computeTicketId(String)}), yani aynı başlık her zaman aynı
+ * kimliği verir ve iki ayrı doküman oluşması yapısal olarak engellenir.
+ *
+ * AI analizi hiçbir yolda burada çalışmaz; her zaman RabbitMQ üzerinden arka
+ * plana devredilir (bkz. {@link TicketAnalysisProducer}), böylece kullanıcı
+ * modelin yanıtını beklemez.
+ */
 @Service
 public class TicketService {
 
@@ -34,11 +48,24 @@ public class TicketService {
 
     private static final Logger logger = LoggerFactory.getLogger(TicketService.class);
 
+    /** Kayıt okuma/yazma deposu. */
     private final TicketRepository ticketRepository;
+
+    /** Elle yazılmış arama sorgularını çalıştıran şablon. */
     private final ElasticsearchOperations elasticsearchOperations;
+
+    /** Analiz isteklerini kuyruğa koyan üretici. */
     private final TicketAnalysisProducer ticketAnalysisProducer;
+
+    /** Kayıt güncellemelerini çakışmaya karşı güvenli yürüten bileşen. */
     private final TicketMutationExecutor ticketMutationExecutor;
 
+    /**
+     * @param ticketRepository        kayıt deposu
+     * @param elasticsearchOperations arama sorgularını çalıştıran şablon
+     * @param ticketAnalysisProducer  analiz kuyruğu üreticisi
+     * @param ticketMutationExecutor  çakışma güvenli güncelleme bileşeni
+     */
     @Autowired
     public TicketService(TicketRepository ticketRepository,
                           ElasticsearchOperations elasticsearchOperations,
@@ -50,7 +77,20 @@ public class TicketService {
         this.ticketMutationExecutor = ticketMutationExecutor;
     }
 
-    // GlobalExceptionHandler için yapay zekasız kayıt metodu
+    /**
+     * Sistem hatasını AI analizine sokmadan doğrudan kayıt olarak yazar.
+     *
+     * Nasıl çalışır: {@link com.skaanb.DejaView.exception.GlobalExceptionHandler}
+     * için tasarlandı. Kuyruğa hiç girilmediği için durum doğrudan
+     * {@link TicketStatus#COMPLETED} yazılır ve AI alanlarına yer tutucu
+     * metinler konur. Tekilleştirme de uygulanmaz — kimlik verilmediği için her
+     * çağrı yeni bir doküman üretir.
+     *
+     * @param errorMessage hatanın metni
+     * @param stackTrace   hatanın yığın izi
+     * @param serviceName  hatanın geldiği servis adı
+     * @return kaydedilmiş doküman (kimliği atanmış hâlde)
+     */
     public TicketDocument saveTicketLog(String errorMessage, String stackTrace, String serviceName) {
         TicketDocument ticket = new TicketDocument();
         ticket.setErrorMessage(errorMessage);
@@ -70,22 +110,35 @@ public class TicketService {
         return saved;
     }
 
-    // Controller katmanından gelen manuel bilet oluşturma isteği.
-    // Aynı başlıkla (büyük/küçük harf duyarsız) daha önce açılmış bir kayıt varsa
-    // yeni kayıt açmak yerine mevcut kayda "yeni bir görülme" olarak işlenir: başlık
-    // değişmez, occurrence sayısı artar, tag'ler birleştirilir. Doküman ID'si başlıktan
-    // deterministik olarak türetilir (bkz. computeTicketId) — böylece aynı başlık için
-    // iki AYRI doküman oluşması yapısal olarak engellenir; concurrent güncellemeler
-    // TicketMutationExecutor ile optimistic locking + retry kullanılarak güvenli şekilde
-    // birleştirilir (bkz. TicketDocument@Version). AI analizi her iki durumda da RabbitMQ
-    // üzerinden arka planda çalışır; sonuç geldiğinde solutions listesine eklenir.
-    //
-    // Bilinen sınır: iki isteğin TAM OLARAK aynı anda, o başlık için ilk kez ticket
-    // oluşturmaya çalıştığı (yani ikisi de "mevcut değil" görüp yeni doküman yazmaya
-    // çalıştığı) çok nadir durumda, ES tarafında gerçek "create-only" (op_type=create)
-    // ataomikliği kullanılmadığı için ikinci yazma ilkini ezebilir. Pratikte ihmal
-    // edilebilir bir risk (aynı milisaniyede aynı başlıkla ilk kayıt); tespit edilirse
-    // ElasticsearchOperations üzerinden IndexQuery.OpType.CREATE ile sıkılaştırılabilir.
+    /**
+     * Yeni kayıt açar ya da aynı başlıklı mevcut kaydın görülme sayısını artırır.
+     *
+     * Nasıl çalışır: önce eksik alanlar varsayılanlara tamamlanır, başlık
+     * normalize edilir ve ondan doküman kimliği türetilir. Sonra iki yoldan
+     * biri işler:
+     *
+     * - Kimlik zaten varsa: başlık DEĞİŞMEZ, görülme sayacı artırılır, son
+     *   görülme zamanı güncellenir, etiketler birleştirilir ve durum PENDING'e
+     *   çekilir. Güncelleme {@link TicketMutationExecutor} üzerinden yapılır,
+     *   yani eşzamanlı iki görülme birbirinin sayacını ezmez.
+     *
+     * - Kimlik yoksa: doküman sıfırdan kurulup kaydedilir.
+     *
+     * Her iki yolda da sonunda AI analizi kuyruğa konur; sonuç geldiğinde
+     * çözüm listesine eklenir.
+     *
+     * Bilinen sınır: iki isteğin TAM OLARAK aynı anda, o başlık için ilk kez
+     * kayıt oluşturmaya çalıştığı (yani ikisinin de "mevcut değil" görüp yeni
+     * doküman yazmaya çalıştığı) çok nadir durumda, Elasticsearch tarafında
+     * gerçek "yalnızca oluştur" ({@code op_type=create}) atomikliği
+     * kullanılmadığı için ikinci yazma ilkini ezebilir. Pratikte ihmal
+     * edilebilir bir risk; tespit edilirse {@code IndexQuery.OpType.CREATE} ile
+     * sıkılaştırılabilir.
+     *
+     * @param request  kayıt gövdesi; alanları eksik olabilir, varsayılanlar uygulanır
+     * @param username kaydı açan kullanıcı adı; yeni dokümanda sahibi olarak yazılır
+     * @return oluşturulan ya da güncellenen kaydın yanıt hâli
+     */
     public TicketResponse createTicket(CreateTicketRequest request, String username) {
         String title = (request.getTitle() != null && !request.getTitle().isBlank())
                 ? request.getTitle().trim()
@@ -131,19 +184,20 @@ public class TicketService {
         return TicketResponse.fromTicket(saved);
     }
 
-    // Aynı normalize edilmiş başlık her zaman aynı hash'i (dolayısıyla aynı doküman ID'sini)
-    // üretir. Bu, "aynı başlık = aynı kayıt" kuralını sorgu bazlı aramaya değil,
-    // dokümanın kimliğine bağlar; başlık bir daha asla değişmeyeceği için stabildir.
     /**
      * İstemciden gelen servis adını temizler.
      *
-     * serviceName Elasticsearch'te Keyword; yani birebir eşleşmeyle filtrelenir.
-     * Bu yüzden baştaki/sondaki boşluklar kırpılır ve makul bir uzunlukla
-     * sınırlanır — aksi halde "odeme" ile "odeme " ayrı iki servis gibi görünür.
+     * Nasıl çalışır: {@code serviceName} Elasticsearch'te Keyword tipindedir,
+     * yani birebir eşleşmeyle filtrelenir. Bu yüzden baştaki/sondaki boşluklar
+     * kırpılır ve makul bir uzunlukla sınırlanır — aksi halde {@code "odeme"}
+     * ile {@code "odeme "} ayrı iki servis gibi görünürdü.
      *
      * Boş gelirse kaydın elle açıldığını belirten varsayılan kullanılır.
-     * (Önceden burada sabit "TicketController" yazılıydı; bu bir servis adı
-     * değil, controller sınıfının adıydı.)
+     * (Önceden burada sabit {@code "TicketController"} yazılıydı; bu bir servis
+     * adı değil, controller sınıfının adıydı.)
+     *
+     * @param raw istemciden gelen ham servis adı; {@code null} olabilir
+     * @return kırpılmış ve uzunluğu sınırlanmış ad; girdi boşsa varsayılan
      */
     private String resolveServiceName(String raw) {
         if (raw == null || raw.isBlank()) {
@@ -155,6 +209,19 @@ public class TicketService {
                 : trimmed;
     }
 
+    /**
+     * Normalize edilmiş başlıktan deterministik doküman kimliği üretir.
+     *
+     * Nasıl çalışır: aynı normalize edilmiş başlık her zaman aynı SHA-256
+     * özetini, dolayısıyla aynı doküman kimliğini üretir. Bu, "aynı başlık =
+     * aynı kayıt" kuralını sorgu bazlı aramaya değil dokümanın kimliğine bağlar;
+     * başlık bir daha asla değişmediği için de kimlik stabildir.
+     *
+     * @param titleNormalized kırpılmış ve küçük harfe çevrilmiş başlık
+     * @return 64 karakterlik onaltılık özet; doküman kimliği olarak kullanılır
+     * @throws IllegalStateException SHA-256 bulunamazsa (pratikte oluşmaz,
+     *                               her JVM'de garanti mevcuttur)
+     */
     private String computeTicketId(String titleNormalized) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -165,20 +232,46 @@ public class TicketService {
             }
             return sb.toString();
         } catch (NoSuchAlgorithmException e) {
-            // SHA-256 her JVM'de garanti mevcuttur; pratikte hiç tetiklenmez.
             throw new IllegalStateException("SHA-256 algoritması bulunamadı", e);
         }
     }
 
+    /**
+     * Kaydı doküman kimliğiyle bulur.
+     *
+     * @param id kaydın doküman kimliği
+     * @return kayıt; yoksa boş {@link Optional}
+     */
     public Optional<TicketDocument> getTicketById(String id) {
         return ticketRepository.findById(id);
     }
 
+    /**
+     * Tüm kayıtları döner.
+     *
+     * Nasıl çalışır: deponun döndürdüğü {@code Iterable} listeye çevrilir.
+     * Sayfalama yoktur; indeks büyüdüğünde bu metodun yerini aramanın alması
+     * beklenir.
+     *
+     * @return indeksteki tüm kayıtlar
+     */
     public List<TicketDocument> getAllTickets() {
         return StreamSupport.stream(ticketRepository.findAll().spliterator(), false)
                 .collect(Collectors.toList());
     }
 
+    /**
+     * Kaydı siler; sahiplik kontrolünü uygular.
+     *
+     * Nasıl çalışır: kayıt önce okunur, sonra yetki denetlenir — ADMIN her
+     * kaydı silebilir, diğer kullanıcılar yalnızca kendi açtıklarını. Yetkisiz
+     * denemeler kimin neyi silmeye çalıştığıyla birlikte loglanır.
+     *
+     * @param id       silinecek kaydın doküman kimliği
+     * @param username isteği yapan kullanıcı adı
+     * @param isAdmin  isteği yapan ADMIN ise {@code true}; sahiplik kontrolünü atlar
+     * @throws RuntimeException kayıt bulunamazsa ya da kullanıcının yetkisi yoksa
+     */
     public void deleteTicket(String id, String username, boolean isAdmin) {
         TicketDocument ticket = ticketRepository.findById(id)
                 .orElseThrow(() -> {
@@ -196,21 +289,47 @@ public class TicketService {
         logger.info("Ticket silindi. id={}, silen={}, admin={}", id, username, isAdmin);
     }
 
-    // Admin: mevcut bir ticket için AI analizini yeniden tetikler. Sonuç, mevcut
-    // solutions listesine yeni bir giriş olarak eklenir (var olanlar korunur).
+    /**
+     * ADMIN: mevcut bir kayıt için AI analizini yeniden tetikler.
+     *
+     * Nasıl çalışır: kaydın durumu PENDING'e çekilir ve istek
+     * {@code regenerate=true} ile kuyruğa girer. Bunun iki sonucu var:
+     * sağlayıcıdan aynı çıktının tekrarı yerine FARKLI bir bakış açısı istenir
+     * ve gelen çözümler mevcut listeye EKLENMEK yerine onun yerine geçer
+     * (bkz. {@link TicketAnalysisListener}). Aksi halde butona her basış
+     * listeye birbirinin benzeri maddeler eklerdi.
+     *
+     * Etiketler yine birleştirilir, yani kullanıcının elle verdikleri korunur.
+     *
+     * @param id yeniden analiz edilecek kaydın doküman kimliği
+     * @return kaydın kuyruğa alınmış (PENDING) hâli
+     * @throws IllegalArgumentException kayıt bulunamazsa
+     */
     public TicketResponse resummarizeTicket(String id) {
         TicketDocument saved = ticketMutationExecutor.mutate(id, ticket -> ticket.setStatus(TicketStatus.PENDING));
 
-        ticketAnalysisProducer.enqueueAnalysis(saved.getId(), saved.getErrorMessage());
+        ticketAnalysisProducer.enqueueAnalysis(saved.getId(), saved.getErrorMessage(), true);
         logger.info("Ticket için AI analizi yeniden kuyruğa alındı (admin). id={}", id);
 
         return TicketResponse.fromTicket(saved);
     }
 
-    // query parametresine göre errorMessage, serviceName ve aiTags alanlarında
-    // büyük/küçük harf duyarsız arama yapar. Eskiden tüm index Java tarafına
-    // çekilip String.contains ile filtreleniyordu; artık eşleştirmeyi
-    // Elasticsearch'in kendisi yapıyor (index büyüdükçe ölçeklenir).
+    /**
+     * Kayıtlarda metin araması yapar.
+     *
+     * Nasıl çalışır: sorgu boşsa tüm kayıtlar döner. Doluysa arama terimi
+     * joker karakterlerle sarılıp üç alanda birden ({@code errorMessage},
+     * {@code serviceName}, {@code aiTags}) büyük/küçük harf duyarsız aranır;
+     * {@code minimumShouldMatch("1")} sayesinde alanlardan HERHANGİ BİRİNDE
+     * eşleşme yeterlidir.
+     *
+     * Eskiden tüm indeks Java tarafına çekilip {@code String.contains} ile
+     * filtreleniyordu; artık eşleştirmeyi Elasticsearch'in kendisi yapıyor,
+     * yani indeks büyüdükçe ölçekleniyor.
+     *
+     * @param query aranacak metin; {@code null} veya boş olabilir
+     * @return eşleşen kayıtların yanıt hâli; sorgu boşsa tüm kayıtlar
+     */
     public List<TicketResponse> searchTickets(String query) {
         logger.debug("Ticket araması yapılıyor. query='{}'", query);
         if (query == null || query.isBlank()) {

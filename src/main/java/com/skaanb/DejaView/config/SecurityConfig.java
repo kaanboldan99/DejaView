@@ -14,32 +14,81 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+/**
+ * Spring Security yapılandırması: hangi ucun kime açık olduğu burada belirlenir.
+ *
+ * Nasıl çalışır: İKİ ayrı filtre zinciri tanımlı ve aktif profile göre yalnızca
+ * biri oluşturulur — dev profilinde gevşek zincir, {@code prod} ve
+ * {@code default} profillerinde korumalı zincir.
+ *
+ * {@code default}'un korumalı zincire dâhil olması bilinçli: profil hiç
+ * verilmediğinde Spring "default" profilini aktif eder. Kapsam yalnızca
+ * {@code prod} olsaydı, deploy sırasında profili vermeyi unutmak tüm uçları
+ * kimlik doğrulamasız açardı — üstelik sessizce.
+ *
+ * Her iki zincir de oturumsuz ({@code STATELESS}) çalışır: kimlik her istekte
+ * JWT'den yeniden kurulur, sunucuda oturum tutulmaz.
+ */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
+    /** Token doğrulama yardımcısı; JWT filtresine verilir. */
     private final JwtUtil jwtUtil;
+
+    /** Kullanıcı ve yetkilerini yükleyen servis. */
     private final CustomUserDetailsService customUserDetailsService;
 
+    /**
+     * @param jwtUtil                  token çözme/doğrulama yardımcısı
+     * @param customUserDetailsService kullanıcı ve yetki bilgisini yükleyen servis
+     */
     public SecurityConfig(JwtUtil jwtUtil,
                           CustomUserDetailsService customUserDetailsService) {
         this.jwtUtil = jwtUtil;
         this.customUserDetailsService = customUserDetailsService;
     }
 
+    /**
+     * JWT doğrulama filtresini bean olarak sunar.
+     *
+     * Nasıl çalışır: her iki zincir de bu bean'i kullanır; filtre isteği
+     * reddetmez, yalnızca geçerli token varsa kimliği güvenlik bağlamına yazar.
+     *
+     * @return zincire eklenecek JWT filtresi
+     */
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter() {
         return new JwtAuthenticationFilter(jwtUtil, customUserDetailsService);
     }
 
+    /**
+     * Şifre hash'leme algoritmasını belirler.
+     *
+     * Nasıl çalışır: BCrypt her hash'e rastgele bir tuz gömer, bu yüzden aynı
+     * şifre her kayıtta farklı bir hash üretir ve karşılaştırma düz eşitlikle
+     * değil {@code matches()} ile yapılır.
+     *
+     * @return uygulama genelinde kullanılan şifre kodlayıcı
+     */
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
     /**
-     * TEST / DEVELOPMENT ORTAMI (dev)
-     * login olmaya gerek kalmadan tüm endpoint'leri test etmeni sağlar.
+     * TEST / GELİŞTİRME ZİNCİRİ (dev profili).
+     *
+     * Nasıl çalışır: tüm isteklere izin verilir ({@code permitAll}), böylece
+     * uçlar giriş yapmadan denenebilir. Buna rağmen JWT filtresi zincire yine
+     * de ekleniyor: yetkilendirme serbest olduğu için token'sız istekler geçer,
+     * ancak token GÖNDERİLDİĞİNDE kullanıcı tanınır. Buna ihtiyaç var çünkü
+     * {@code /api/users/me} ve kayıt sahipliği "kim olduğunu" bilmek zorunda;
+     * aksi halde dev ortamında herkes "anonymous_user" görünürdü.
+     *
+     * @param http Spring'in sağladığı güvenlik yapılandırma nesnesi
+     * @return dev profiline özel, korumasız filtre zinciri
+     * @throws Exception yapılandırma sırasında oluşan hata
      */
     @Bean
     @Profile("dev")
@@ -50,13 +99,8 @@ public class SecurityConfig {
                 .sessionManagement(sess -> sess.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .userDetailsService(customUserDetailsService)
                 .authorizeHttpRequests(auth -> auth
-                        // dev profilinde tüm isteklere (permitAll) izin veriyoruz
                         .anyRequest().permitAll()
                 )
-                // Yetkilendirme permitAll olduğu için token'sız istekler yine geçer;
-                // ancak token GÖNDERİLDİĞİNDE kullanıcı tanınır. Buna ihtiyaç var:
-                // /api/users/me ve ticket sahipliği "kim olduğunu" bilmek zorunda,
-                // aksi halde dev'de herkes "anonymous_user" görünür.
                 .addFilterBefore(jwtAuthenticationFilter(),
                         UsernamePasswordAuthenticationFilter.class);
 
@@ -64,8 +108,25 @@ public class SecurityConfig {
     }
 
     /**
-     * PROD ORTAMI (prod veya default)
-     * Canlı ortamda tam güvenlik sağlar, yetkisiz istekleri engeller.
+     * KORUMALI ZİNCİR (prod ve default profilleri).
+     *
+     * Nasıl çalışır: kurallar yukarıdan aşağı, İLK EŞLEŞEN kazanır sırasıyla
+     * değerlendirilir ve en sonda {@code anyRequest().authenticated()} durur —
+     * yani açıkça serbest bırakılmayan her uç kimlik doğrulaması ister.
+     * Serbest bırakılanlar yalnızca giriş ucu ve API dokümantasyonu;
+     * yönetimsel uçlar ADMIN rolüne kısıtlıdır.
+     *
+     * Kayıt ucu ({@code /api/auth/register}) bilinçli olarak herkese açık
+     * değil: yeni kullanıcıyı yalnızca ADMIN ekleyebilir.
+     *
+     * H2 konsolu burada YOK: bu zincir profil verilmediğinde de devreye
+     * girdiği için, konsolu buraya eklemek üretimde veritabanı konsolunu
+     * herkese açık bırakırdı. Konsol yalnızca dev profilinde etkin
+     * ({@code application-dev.properties}).
+     *
+     * @param http Spring'in sağladığı güvenlik yapılandırma nesnesi
+     * @return üretimde kullanılan korumalı filtre zinciri
+     * @throws Exception yapılandırma sırasında oluşan hata
      */
     @Bean
     @Profile({"prod", "default"})
@@ -77,15 +138,16 @@ public class SecurityConfig {
                 .userDetailsService(customUserDetailsService)
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/login").permitAll()
-                        // Kullanıcı kaydı artık herkese açık değil; sadece ADMIN
-                        // yeni kullanıcı ekleyebilir.
+                        /* Kullanıcı kaydı herkese açık değil; sadece ADMIN ekleyebilir. */
                         .requestMatchers("/api/auth/register").hasRole("ADMIN")
-                        // AI'a yeniden özetletme, sadece ADMIN yetkisiyle tetiklenebilir.
+                        /* AI'a yeniden özetletme, sadece ADMIN yetkisiyle tetiklenebilir. */
                         .requestMatchers("/api/tickets/*/resummarize").hasRole("ADMIN")
-                        // H2 konsolu bilinçli olarak BURADA YOK: bu zincir profil
-                        // verilmediğinde de (default) devreye giriyor, yani üretimde
-                        // veritabanı konsolunu herkese açık bırakırdı. Konsol zaten
-                        // yalnızca dev profilinde etkin (application-dev.properties).
+                        /*
+                         * Park kuyruğunu görüntülemek ve geri oynatmak operasyonel bir
+                         * işlem: kuyruk durumunu sızdırmamak ve toplu yeniden analizi
+                         * herkesin tetikleyememesi için ADMIN'e kısıtlı.
+                         */
+                        .requestMatchers("/api/tickets/analysis/parked/**").hasRole("ADMIN")
                         .requestMatchers(
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
