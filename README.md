@@ -1,7 +1,8 @@
 # DejaView
 
 Hata/ticket takip sistemi. Backend'de yakalanan hatalar veya kullanıcıların elle
-açtığı kayıtlar Elasticsearch'e indeksleniyor, Gemini ile otomatik özetleniyor,
+açtığı kayıtlar Elasticsearch'e indeksleniyor, bu makinede çalışan bir yapay zekâ
+modeliyle otomatik özetleniyor,
 aynı hata tekrar oluştuğunda ayrı bir kayıt açmak yerine mevcut kayda birleştiriliyor
 ("bu hatayı daha önce gördük mü?" — isim buradan geliyor).
 
@@ -12,10 +13,10 @@ aynı hata tekrar oluştuğunda ayrı bir kayıt açmak yerine mevcut kayda birl
 | **H2** (in-memory) | Kullanıcılar (`User`), JPA | Uygulamayla aynı süreçte, **restart'ta veri kaybolur** |
 | **Elasticsearch** | Ticket'lar (`TicketDocument`), arama | Ayrı sunucu (home-pi), kalıcı |
 | **RabbitMQ** | Ticket oluşturulduğunda AI analizini asenkron kuyruğa almak | Ayrı sunucu (home-pi) |
-| **Gemini API** | Hata açıklamasını özetleyip çözüm önerisi üretmek | Google (dış servis) |
+| **Yerel AI modeli** | Hata açıklamasını özetleyip çözüm önerisi ve etiket üretmek | LM Studio, `localhost:1234` (OpenAI uyumlu uç) |
 
 Ticket oluşturma akışı: istek gelir → kayıt `PENDING` durumuyla anında döner →
-RabbitMQ üzerinden arka planda Gemini'ye gönderilir → sonuç `solutions` listesine
+RabbitMQ üzerinden arka planda yerel modele gönderilir → sonuç `solutions` listesine
 eklenir (üzerine yazılmaz, birikir) → durum `COMPLETED`/`FAILED` olur.
 
 Aynı başlıkla (büyük/küçük harf duyarsız) tekrar gelen kayıtlar yeni bir doküman
