@@ -18,11 +18,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
 
@@ -104,7 +101,7 @@ public class TicketService {
             saved = ticketMutationExecutor.mutate(ticketId, ticket -> {
                 ticket.setOccurrenceCount(ticket.getOccurrenceCount() + 1);
                 ticket.setLastOccurrenceAt(Instant.now());
-                ticket.setAiTags(mergeTags(ticket.getAiTags(), requestedTags));
+                ticket.mergeAiTags(requestedTags);
                 ticket.setStatus(TicketStatus.PENDING);
             });
             logger.info("Aynı başlıkla mevcut ticket bulundu, occurrence artırıldı. id={}, title='{}', occurrenceCount={}",
@@ -171,17 +168,6 @@ public class TicketService {
             // SHA-256 her JVM'de garanti mevcuttur; pratikte hiç tetiklenmez.
             throw new IllegalStateException("SHA-256 algoritması bulunamadı", e);
         }
-    }
-
-    private List<String> mergeTags(List<String> existingTags, List<String> newTags) {
-        Set<String> merged = new LinkedHashSet<>();
-        if (existingTags != null) {
-            merged.addAll(existingTags);
-        }
-        if (newTags != null) {
-            merged.addAll(newTags);
-        }
-        return new ArrayList<>(merged);
     }
 
     public Optional<TicketDocument> getTicketById(String id) {

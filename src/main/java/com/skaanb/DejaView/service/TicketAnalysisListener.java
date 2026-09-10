@@ -1,6 +1,7 @@
 package com.skaanb.DejaView.service;
 
 import com.skaanb.DejaView.config.RabbitConfig;
+import com.skaanb.DejaView.dto.AIAnalysisResponse;
 import com.skaanb.DejaView.dto.TicketAnalysisMessage;
 import com.skaanb.DejaView.exception.AiSummarizationException;
 import com.skaanb.DejaView.model.TicketStatus;
@@ -47,15 +48,22 @@ public class TicketAnalysisListener {
         ticketMutationExecutor.mutate(ticketId, ticket -> ticket.setStatus(TicketStatus.PROCESSING));
 
         try {
-            String solution = aiSummarizationService.summarize(message.getDescription());
+            // summarize() yerine analyze(): özet ve etiketler tek çağrıda geliyor
+            // (bkz. AiSummarizationService.analyze).
+            AIAnalysisResponse analysis = aiSummarizationService.analyze(message.getDescription());
 
             ticketMutationExecutor.mutate(ticketId, ticket -> {
-                ticket.setAiGeneratedDescription(solution);
-                ticket.getSolutions().add(solution);
+                ticket.setAiGeneratedDescription(analysis.getDescription());
+                ticket.getSolutions().add(analysis.getSolution());
+                // Etiketler var olanların ÜZERİNE yazılmıyor, birleştiriliyor: kullanıcının
+                // ticket'ı açarken elle verdiği etiketler kaybolmamalı (bkz. mergeAiTags).
+                // Yapısal çıktı desteklemeyen bir sağlayıcı aktifse liste boş gelir ve
+                // etiketler olduğu gibi kalır — bu beklenen bir durum, hata değil.
+                ticket.mergeAiTags(analysis.getTags());
                 ticket.setStatus(TicketStatus.COMPLETED);
             });
 
-            logger.info("Ticket AI analizi tamamlandı. ticketId={}", ticketId);
+            logger.info("Ticket AI analizi tamamlandı. ticketId={}, etiketler={}", ticketId, analysis.getTags());
         } catch (AiSummarizationException e) {
             logger.error("Ticket AI analizi başarısız oldu. ticketId={}, hata={}", ticketId, e.getMessage(), e);
             ticketMutationExecutor.mutate(ticketId, ticket -> ticket.setStatus(TicketStatus.FAILED));

@@ -7,7 +7,9 @@ import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Document(indexName = "dejaview_tickets")
 public class TicketDocument {
@@ -100,6 +102,23 @@ public class TicketDocument {
 
     public List<String> getAiTags() { return aiTags; }
     public void setAiTags(List<String> aiTags) { this.aiTags = aiTags; }
+
+    // Etiketler üzerine YAZILMAZ, birleştirilir: aynı ticket hem kullanıcının elle verdiği
+    // etiketleri hem de arka planda çalışan AI analizinin ürettiklerini alabilir ve ikisi de
+    // korunmalı. LinkedHashSet tekrarları eler ama ekleme sırasını bozmaz, böylece önce
+    // gelen (genelde kullanıcının kendi verdiği) etiket listenin başında kalır.
+    // Bu mantık TicketService ve TicketAnalysisListener'da ayrı ayrı kopyalanmak yerine
+    // burada duruyor — etiketlerin nasıl birleşeceğini bilmesi gereken dokümanın kendisi.
+    public void mergeAiTags(List<String> newTags) {
+        Set<String> merged = new LinkedHashSet<>();
+        if (this.aiTags != null) {
+            merged.addAll(this.aiTags);
+        }
+        if (newTags != null) {
+            merged.addAll(newTags);
+        }
+        this.aiTags = new ArrayList<>(merged);
+    }
 
     public List<String> getSolutions() { return solutions; }
     public void setSolutions(List<String> solutions) { this.solutions = solutions; }

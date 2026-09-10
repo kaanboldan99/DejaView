@@ -4,16 +4,20 @@ import com.skaanb.DejaView.exception.AiSummarizationException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Primary;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import java.util.Map;
 import java.util.List;
 
-// @Primary: AiSummarizationService'in birden fazla implementasyonu olduğunda (bkz. OpenAiService)
-// Spring'in qualifier belirtilmeden hangisini enjekte edeceğini bilmesi için aktif sağlayıcı.
+// Aktif sağlayıcı dejaview.ai.provider ile seçiliyor; varsayılan (matchIfMissing) Gemini,
+// yani ayar verilmediğinde davranış eskisi gibi. Önceden bu seçim @Primary ile yapılıyordu
+// ama @Primary sağlayıcıyı KODA gömüyordu: yerel bir modele geçmek için sınıf düzenleyip
+// yeniden derlemek gerekiyordu. Artık profil/ortam değişkeni yetiyor
+// (bkz. application-local-ai.properties) ve aynı anda tek bir bean ayakta olduğu için
+// @Primary'ye de gerek kalmıyor.
 @Service
-@Primary
+@ConditionalOnProperty(name = "dejaview.ai.provider", havingValue = "gemini", matchIfMissing = true)
 public class GeminiService implements AiSummarizationService {
 
     private static final Logger logger = LoggerFactory.getLogger(GeminiService.class);
